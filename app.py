@@ -151,10 +151,12 @@ if run:
                 }
                 preview_box = st.empty()
 
-                def on_progress(stage: str, state: str) -> None:
+                def on_progress(stage: str, state: str, preview: str | None = None) -> None:
                     if state == "start":
                         st.write(labels[stage])
                         preview_box.info(previews[stage])
+                    elif state == "done" and preview:
+                        preview_box.info(preview)
 
                 result = run_committee(ticker, fundamentals, news, on_progress)
                 preview_box.success("Reasoning complete.")

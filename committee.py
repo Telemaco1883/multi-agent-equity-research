@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from llm_client import generate_response
 
-ProgressCallback = Callable[[str, str], None]  # (stage_key, "start" | "done")
+ProgressCallback = Callable[[str, str, str | None], None]  # (stage_key, "start" | "done", preview)
 
 FUNDAMENTAL_PROMPT = (
     "You are a Fundamental Analyst on an investment committee. Evaluate valuation, balance sheet "
@@ -145,6 +145,17 @@ def extract_section(text: str, heading: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _first_sentences(text: str, max_sentences: int = 2) -> str:
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if not cleaned:
+        return ""
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", cleaned) if p.strip()]
+    if not parts:
+        return cleaned[:280]
+    preview = " ".join(parts[:max_sentences]).strip()
+    return preview[:360]
+
+
 def run_committee(
     ticker: str,
     fundamentals: dict,
@@ -157,9 +168,9 @@ def run_committee(
     verdict, conviction, summary, risks.
     """
 
-    def notify(stage: str, status: str) -> None:
+    def notify(stage: str, status: str, preview: str | None = None) -> None:
         if on_progress:
-            on_progress(stage, status)
+            on_progress(stage, status, preview)
 
     news_text = "\n\n".join(
         (
@@ -188,19 +199,26 @@ def run_committee(
         analysts = {k: f.result() for k, f in futures.items()}
     if _fundamental_response_is_incoherent(analysts["fundamental"], fundamentals):
         analysts["fundamental"] = _deterministic_fundamental_memo(ticker, fundamentals)
-    notify("analysts", "done")
+    analysts_preview = "\n".join(
+        [
+            f"**Fundamental:** {_first_sentences(analysts['fundamental'])}",
+            f"**Sentiment:** {_first_sentences(analysts['sentiment'])}",
+            f"**Technical:** {_first_sentences(analysts['technical'])}",
+        ]
+    )
+    notify("analysts", "done", analysts_preview)
 
     reports = "\n\n".join(f"## {k.title()} Analyst\n{v}" for k, v in analysts.items())
 
     notify("pm", "start")
     pm_initial = generate_response(PM_PROMPT, f"Ticker: {ticker}\n\n{reports}")
-    notify("pm", "done")
+    notify("pm", "done", _first_sentences(pm_initial))
 
     notify("devil", "start")
     devil = generate_response(
         DEVIL_PROMPT, f"Ticker: {ticker}\n\n{reports}\n\n## PM Initial Ruling\n{pm_initial}"
     )
-    notify("devil", "done")
+    notify("devil", "done", _first_sentences(devil))
 
     notify("final", "start")
     final = generate_response(
@@ -208,7 +226,7 @@ def run_committee(
         f"Ticker: {ticker}\n\n{reports}\n\n## PM Initial Ruling\n{pm_initial}\n\n"
         f"## Devil's Advocate\n{devil}",
     )
-    notify("final", "done")
+    notify("final", "done", _first_sentences(final))
 
     verdict, conviction = parse_verdict(final)
     return {
