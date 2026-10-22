@@ -30,12 +30,6 @@ def _render_ticker_data(
     macro_summary: str,
     macro_commentary: list[dict],
 ) -> None:
-    profile_rows = fundamentals.get("profile")
-    profile = profile_rows[0] if isinstance(profile_rows, list) and profile_rows else {}
-    name = profile.get("companyName") or ticker_symbol
-    sector = profile.get("sector") or "N/A"
-    industry = profile.get("industry") or "N/A"
-
     with st.expander("Street macro consensus (Step 1)", expanded=True):
         st.write(macro_summary or "No street macro commentary summary available.")
         if macro_commentary:
@@ -46,8 +40,6 @@ def _render_ticker_data(
                         f" ({item.get('published', '')})"
                     )
 
-    st.subheader(f"{name} ({ticker_symbol})")
-    st.caption(f"{sector} | {industry}")
     with st.expander("Raw downloaded fundamentals data", expanded=True):
         st.json(fundamentals)
 
@@ -122,7 +114,6 @@ if run:
                                 f" ({item.get('published', '')})"
                             )
         else:
-            st.markdown("### Ticker data loaded")
             _render_ticker_data(ticker, fundamentals, news, macro_summary, macro_commentary)
             rendered_in_run = True
 
