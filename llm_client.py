@@ -1,22 +1,39 @@
-"""Thin client for the Hugging Face inference endpoint configured in config.py."""
+"""Thin chat client supporting HF dedicated endpoints and HF Router."""
 from __future__ import annotations
 
 import time
 
 from huggingface_hub import InferenceClient
+from openai import OpenAI
 
 import config
 
-_client: InferenceClient | None = None
+_hf_endpoint_client: InferenceClient | None = None
+_hf_router_client: OpenAI | None = None
 
 
-def _get_client() -> InferenceClient:
-    """Lazily build the inference client from backend configuration."""
-    global _client
-    if _client is None:
+def _get_endpoint_client() -> InferenceClient:
+    """Lazily build a dedicated HF Inference Endpoint client."""
+    global _hf_endpoint_client
+    if _hf_endpoint_client is None:
         config.validate_config()
-        _client = InferenceClient(base_url=config.HF_INFERENCE_ENDPOINT, token=config.HF_TOKEN)
-    return _client
+        _hf_endpoint_client = InferenceClient(
+            base_url=config.HF_INFERENCE_ENDPOINT,
+            token=config.HF_TOKEN,
+        )
+    return _hf_endpoint_client
+
+
+def _get_router_client() -> OpenAI:
+    """Lazily build an OpenAI-compatible HF Router client."""
+    global _hf_router_client
+    if _hf_router_client is None:
+        config.validate_config()
+        _hf_router_client = OpenAI(
+            base_url=config.HF_ROUTER_BASE_URL,
+            api_key=config.HF_TOKEN,
+        )
+    return _hf_router_client
 
 
 def generate_response(
@@ -30,7 +47,6 @@ def generate_response(
 
     Raises RuntimeError after all attempts fail.
     """
-    client = _get_client()
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
@@ -38,8 +54,21 @@ def generate_response(
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            result = client.chat_completion(messages=messages, max_tokens=max_tokens, temperature=0.4)
-            content = result.choices[0].message.content
+            if config.HF_INFERENCE_ENDPOINT:
+                result = _get_endpoint_client().chat_completion(
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.4,
+                )
+                content = result.choices[0].message.content
+            else:
+                result = _get_router_client().chat.completions.create(
+                    model=config.HF_MODEL,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=0.4,
+                )
+                content = result.choices[0].message.content
             if content and content.strip():
                 return content.strip()
             last_error = RuntimeError("Empty response from model")

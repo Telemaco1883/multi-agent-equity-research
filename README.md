@@ -4,7 +4,7 @@ Streamlit app running an automated investment committee debate on US stocks.
 
 ```
 pip install -r requirements.txt
-cp .env.example .env   # set HF_INFERENCE_ENDPOINT and HF_TOKEN
+cp .env.example .env   # set either HF_INFERENCE_ENDPOINT or HF_MODEL, plus HF_TOKEN
 streamlit run app.py
 ```
 
