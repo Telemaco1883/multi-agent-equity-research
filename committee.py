@@ -24,9 +24,8 @@ TECHNICAL_PROMPT = (
     "(50/200-day MAs, RSI) and key support/resistance levels using ONLY the data provided."
 )
 MACRO_CONSENSUS_PROMPT = (
-    "You are a macro strategist. Summarize the street consensus from major institutions "
-    "(UBS, BlackRock, Goldman Sachs, JPMorgan, Morgan Stanley, Citi, Bank of America) based "
-    "ONLY on the commentary snippets provided. Focus on ASSET-CLASS level views, not single-bank "
+    "You are a macro strategist. Summarize the street consensus based ONLY on the commentary "
+    "snippets provided. Focus on ASSET-CLASS level views, not single-bank "
     "earnings commentary. Output exactly 5 concise bullet points with these labels: "
     "Rates/Inflation, Equities, Credit, FX/Commodities, and Positioning/Risk Sentiment. "
     "Use the provided article content snippets as primary evidence (not headlines alone). "
