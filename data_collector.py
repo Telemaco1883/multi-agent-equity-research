@@ -45,23 +45,34 @@ def get_stock_fundamentals(ticker: str) -> dict:
     data: dict[str, Any] = {"ticker": ticker}
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info or {}
+        try:
+            info = stock.info or {}
+        except Exception:
+            info = {}
+
         hist = stock.history(period="1y")
+        if hist is None or hist.empty:
+            hist = yf.download(ticker, period="1y", progress=False, threads=False)
+        if hist is None or hist.empty:
+            hist = stock.history(period="6mo")
+        if hist is None or hist.empty:
+            hist = yf.download(ticker, period="6mo", progress=False, threads=False)
     except Exception as exc:
         return {"ticker": ticker, "error": f"Failed to fetch market data: {exc}"}
 
-    if hist is None or hist.empty or not (info.get("longName") or info.get("shortName")):
+    if hist is None or hist.empty:
         return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
 
     close = hist["Close"].dropna()
-    price = _num(close.iloc[-1]) if len(close) else None
+    fast_info = getattr(stock, "fast_info", {}) or {}
+    price = _num(close.iloc[-1]) if len(close) else _num(fast_info.get("lastPrice"))
     data.update(
         {
-            "name": info.get("longName") or info.get("shortName"),
+            "name": info.get("longName") or info.get("shortName") or ticker,
             "sector": info.get("sector"),
             "industry": info.get("industry"),
             "price": price,
-            "market_cap": _num(info.get("marketCap")),
+            "market_cap": _num(info.get("marketCap")) or _num(fast_info.get("marketCap")),
             "valuation": {
                 "trailing_pe": _num(info.get("trailingPE")),
                 "forward_pe": _num(info.get("forwardPE")),
