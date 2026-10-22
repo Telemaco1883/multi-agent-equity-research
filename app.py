@@ -105,11 +105,11 @@ def _render_ticker_data(
         return
 
     with st.expander("3) Fundamental analyst", expanded=False):
-        st.write(result["analysts"]["fundamental"])
+        st.markdown(result["analysts"]["fundamental"])
     with st.expander("4) Sentiment analyst", expanded=False):
-        st.write(result["analysts"]["sentiment"])
+        st.markdown(result["analysts"]["sentiment"])
     with st.expander("5) Technical analyst", expanded=False):
-        st.write(result["analysts"]["technical"])
+        st.markdown(result["analysts"]["technical"])
         _render_technical_charts(fundamentals)
     with st.expander("6) PM initial ruling", expanded=False):
         st.markdown(result["pm_initial"])
@@ -118,7 +118,8 @@ def _render_ticker_data(
     with st.expander("8) Investment committee decision", expanded=False):
         color = COLORS.get(result["verdict"], "gray")
         st.markdown(f"**Verdict:** :{color}[{result['verdict']}]")
-        st.markdown(result["final"])
+        st.markdown("**Executive Summary**")
+        st.markdown(result.get("summary") or result["final"])
 
 
 ticker = st.text_input("Ticker", placeholder="TSLA", key="ticker_input").strip().upper()

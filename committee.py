@@ -92,6 +92,7 @@ Rules:
 6. Keep output under 180 words.
 7. Be impartial: present both bullish and bearish technical evidence before your final opinion.
 8. Stay strictly in technical analysis.
+9. You MUST provide exactly 3 bullets under Pros and exactly 3 bullets under Cons.
 
 Output exactly this structure:
 ## Technical Analyst
@@ -186,15 +187,7 @@ FINAL_PROMPT = (
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL|NEUTRAL\n"
     "Executive Summary\n"
-    "- <bullet 1>\n"
-    "- <bullet 2>\n"
-    "Horizon\n"
-    "- <short/medium/long guidance>\n"
-    "Sizing Guidance\n"
-    "- <position sizing guidance>\n"
-    "Key Risks\n"
-    "- <risk 1>\n"
-    "- <risk 2>\n"
+    "<single concise paragraph with the decision logic and top risks>\n"
 )
 
 
@@ -213,7 +206,7 @@ def _parse_pm_verdict(text: str) -> str:
 
 def extract_section(text: str, heading: str) -> str:
     """Return the body of a named section (up to the next heading), or ''."""
-    pattern = rf"(?:^|\n)[#*\s]*{re.escape(heading)}[^\n]*\n(.*?)(?=\n[#*\s]*(?:Executive Summary|Horizon|Sizing|Key Risks)|\Z)"
+    pattern = rf"(?:^|\n)[#*\s]*{re.escape(heading)}[^\n]*\n(.*?)(?=\n[#*\s]*(?:Executive Summary|Horizon|Sizing|Key Risks|CORE LOGIC|SUPPORTING EVIDENCE|RISKS TO THESIS|THESIS|COUNTER-THESIS|COUNTER-EVIDENCE|CRITICAL ASSUMPTION FAILURES)|\Z)"
     match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
     return match.group(1).strip() if match else ""
 
@@ -248,6 +241,34 @@ def _normalize_structured_sections(text: str) -> str:
     for heading in headings:
         cleaned = re.sub(rf"\s*{re.escape(heading)}\s*", f"\n\n{heading}\n", cleaned, flags=re.IGNORECASE)
     cleaned = cleaned.replace("__RISKS_TO_THESIS__", "\n\nRISKS TO THESIS:\n")
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+def _normalize_analyst_sections(text: str) -> str:
+    """Normalize analyst markdown blocks so section labels never collapse onto one line."""
+    cleaned = (text or "").replace("\r\n", "\n").strip()
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+
+    # Keep stance value on same line, but force a clean break before the next heading.
+    cleaned = re.sub(r"\*\*Stance:\*\*\s*", "Stance: ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+(?=(?:\*\*)?(?:Pros|Cons|What matters most|Evidence from provided data|Primary failure mode|Dominant narratives|Near-term catalysts|Sentiment risks|Trend/Momentum read)\b)", "\n\n", cleaned, flags=re.IGNORECASE)
+
+    headings = [
+        "Pros (3 bullets):",
+        "Cons (3 bullets):",
+        "What matters most (3 bullets):",
+        "Evidence from provided data (4 bullets max):",
+        "Primary failure mode (1 bullet):",
+        "Dominant narratives (3 bullets):",
+        "Near-term catalysts (2 bullets):",
+        "Sentiment risks (2 bullets):",
+        "Trend/Momentum read (3 bullets):",
+    ]
+    for heading in headings:
+        cleaned = re.sub(rf"(?:\*\*)?{re.escape(heading)}(?:\*\*)?", f"{heading}", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(rf"\s*{re.escape(heading)}\s*", f"\n\n{heading}\n", cleaned, flags=re.IGNORECASE)
+
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
@@ -390,6 +411,7 @@ def run_committee(
             for k, (s, u, max_tokens) in jobs.items()
         }
         analysts = {k: f.result() for k, f in futures.items()}
+    analysts = {k: _normalize_analyst_sections(v) for k, v in analysts.items()}
     analysts_preview = "\n".join(
         [
             f"**Fundamental:** {_first_sentences(analysts['fundamental'])}",
