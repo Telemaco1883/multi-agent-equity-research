@@ -383,8 +383,8 @@ def get_latest_news(ticker: str, limit: int = 8) -> list[dict]:
     return [item for item in enriched if item.get("title")]
 
 
-def get_street_commentary(limit: int = 12) -> list[dict]:
-    """Fetch recent macro commentary headlines from major street institutions."""
+def get_street_commentary(limit: int = 20) -> list[dict]:
+    """Fetch recent macro commentary items from major street institutions."""
     max_items = max(limit, 0)
     if max_items == 0:
         return []
@@ -405,8 +405,9 @@ def get_street_commentary(limit: int = 12) -> list[dict]:
     for item in enriched:
         title = (item.get("title") or "").strip()
         link = (item.get("link") or "").strip()
+        content = (item.get("article_text") or item.get("snippet") or "").strip()
         key = link or title.lower()
-        if not title or not key or key in seen:
+        if not title or not key or key in seen or len(content) < 40:
             continue
         seen.add(key)
         unique.append(item)

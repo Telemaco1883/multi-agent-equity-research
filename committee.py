@@ -29,6 +29,7 @@ MACRO_CONSENSUS_PROMPT = (
     "ONLY on the commentary snippets provided. Focus on ASSET-CLASS level views, not single-bank "
     "earnings commentary. Output exactly 5 concise bullet points with these labels: "
     "Rates/Inflation, Equities, Credit, FX/Commodities, and Positioning/Risk Sentiment. "
+    "Use the provided article content snippets as primary evidence (not headlines alone). "
     "If an area has weak evidence, explicitly say so."
 )
 PM_PROMPT = (
@@ -175,7 +176,7 @@ def summarize_street_consensus(commentary: list[dict[str, Any]]) -> str:
             f"Source: {item.get('link', '')}\n"
             f"Content: {(item.get('article_text') or item.get('snippet') or '')[:900]}"
         )
-        for item in commentary[:12]
+        for item in commentary[:20]
     )
     try:
         summary = generate_response(MACRO_CONSENSUS_PROMPT, payload, max_tokens=450)

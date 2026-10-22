@@ -64,13 +64,13 @@ def _render_ticker_data(
 
     with st.expander("Street macro consensus (Step 1)", expanded=True):
         st.write(macro_summary or "No street macro commentary summary available.")
-    if macro_commentary:
-        with st.expander("Street macro source headlines", expanded=False):
-            for item in macro_commentary[:8]:
-                st.markdown(
-                    f"- [{item.get('title', 'Untitled')}]({item.get('link', '')})"
-                    f" ({item.get('published', '')})"
-                )
+        if macro_commentary:
+            with st.expander("Street macro source headlines", expanded=False):
+                for item in macro_commentary[:20]:
+                    st.markdown(
+                        f"- [{item.get('title', 'Untitled')}]({item.get('link', '')})"
+                        f" ({item.get('published', '')})"
+                    )
 
     st.subheader(f"{fundamentals.get('name') or ticker_symbol} ({ticker_symbol})")
     st.caption(
@@ -134,7 +134,7 @@ if run:
     else:
         with st.status("Collecting market data and news...", expanded=True) as status:
             st.write("1/6 Fetching latest street macro commentary...")
-            macro_commentary = get_street_commentary(limit=12)
+            macro_commentary = get_street_commentary(limit=20)
             macro_summary = summarize_street_consensus(macro_commentary)
             if not macro_commentary:
                 st.write("⚠️ No street macro commentary found; consensus summary may be limited.")
