@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 
+import pandas as pd
 import streamlit as st
 
 import config
@@ -42,6 +43,29 @@ def _render_ticker_data(
                     )
 
     with st.expander("2) Raw downloaded data", expanded=True):
+        st.markdown("**Technical chart (price + moving averages)**")
+        technical_chart = fundamentals.get("technical_chart") or []
+        if technical_chart:
+            chart_df = pd.DataFrame(technical_chart)
+            if not chart_df.empty and "date" in chart_df.columns:
+                chart_df["date"] = pd.to_datetime(chart_df["date"], errors="coerce")
+                chart_df = chart_df.dropna(subset=["date"]).set_index("date")
+                line_cols = [col for col in ["close", "sma_20", "sma_50", "sma_100", "sma_200", "ema_21", "ema_50"] if col in chart_df.columns]
+                if line_cols:
+                    st.line_chart(chart_df[line_cols], use_container_width=True)
+                osc_cols = [col for col in ["rsi_14"] if col in chart_df.columns]
+                if osc_cols:
+                    st.markdown("**RSI (14)**")
+                    st.line_chart(chart_df[osc_cols], use_container_width=True)
+                macd_cols = [col for col in ["macd", "macd_signal", "macd_hist"] if col in chart_df.columns]
+                if macd_cols:
+                    st.markdown("**MACD**")
+                    st.line_chart(chart_df[macd_cols], use_container_width=True)
+        tech_summary = fundamentals.get("technical_summary")
+        if tech_summary:
+            st.markdown("**Technical summary**")
+            st.json(tech_summary)
+
         st.markdown("**Fundamentals JSON**")
         st.json(fundamentals)
         st.markdown("**Recent headlines**")
@@ -73,7 +97,6 @@ def _render_ticker_data(
     with st.expander("8) Investment committee decision", expanded=True):
         color = COLORS.get(result["verdict"], "gray")
         st.markdown(f"**Verdict:** :{color}[{result['verdict']}]")
-        st.markdown(f"**Conviction:** {result['conviction']}")
         st.write(result["final"])
 
 
@@ -100,7 +123,7 @@ if run:
     else:
         with st.status("Collecting market data and news...", expanded=True) as status:
             st.write("1/6 Fetching latest street macro commentary...")
-            macro_commentary = get_street_commentary(limit=60)
+            macro_commentary = get_street_commentary(limit=30)
             macro_summary = summarize_street_consensus(macro_commentary)
             st.session_state["macro_commentary"] = macro_commentary
             st.session_state["macro_summary"] = macro_summary

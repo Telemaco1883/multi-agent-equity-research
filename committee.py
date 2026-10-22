@@ -24,7 +24,6 @@ Rules:
 Output exactly this structure:
 ## Fundamental Analyst
 **Stance:** Bullish | Neutral | Bearish
-**Confidence:** High | Medium | Low
 **What matters most (3 bullets):**
 - ...
 - ...
@@ -47,7 +46,6 @@ Rules:
 Output exactly this structure:
 ## Sentiment Analyst
 **Stance:** Risk-On | Neutral | Risk-Off
-**Confidence:** High | Medium | Low
 **Dominant narratives (3 bullets):**
 - ...
 - ...
@@ -61,18 +59,17 @@ Output exactly this structure:
 """
 TECHNICAL_PROMPT = """
 You are the Technical Analyst on an investment committee.
-Use ONLY the provided raw JSON fields.
+Use ONLY the provided technical summary JSON.
 Reason deeply, but output only the final concise answer.
 
 Rules:
-1. If technical fields are missing, state that explicitly and reduce confidence.
+1. If technical fields are missing, state that explicitly.
 2. Do not fabricate support/resistance levels.
 3. Keep output under 180 words.
 
 Output exactly this structure:
 ## Technical Analyst
 **Stance:** Bullish | Neutral | Bearish
-**Confidence:** High | Medium | Low
 **Trend/Momentum read (3 bullets):**
 - ...
 - ...
@@ -104,7 +101,6 @@ PM_PROMPT = (
     "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL\n"
-    "CONVICTION: High|Medium|Low\n"
     "THESIS:\n"
     "- <bullet 1>\n"
     "- <bullet 2>\n"
@@ -132,7 +128,6 @@ FINAL_PROMPT = (
     "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL|NEUTRAL\n"
-    "CONVICTION: High|Medium|Low\n"
     "Executive Summary\n"
     "- <bullet 1>\n"
     "- <bullet 2>\n"
@@ -146,17 +141,13 @@ FINAL_PROMPT = (
 )
 
 
-def parse_verdict(text: str) -> tuple[str, str]:
-    """Extract (verdict, conviction) from final output, defaulting to NEUTRAL / Low."""
+def parse_verdict(text: str) -> str:
+    """Extract verdict from final output, defaulting to NEUTRAL."""
     verdict = re.search(r"VERDICT\W*(BUY|SELL|NEUTRAL|HOLD)", text, re.IGNORECASE)
-    conviction = re.search(r"CONVICTION\W*(High|Medium|Low)", text, re.IGNORECASE)
     verdict_value = verdict.group(1).upper() if verdict else "NEUTRAL"
     if verdict_value == "HOLD":
         verdict_value = "NEUTRAL"
-    return (
-        verdict_value,
-        conviction.group(1).capitalize() if conviction else "Low",
-    )
+    return verdict_value
 
 
 def _parse_pm_verdict(text: str) -> str:
@@ -190,9 +181,9 @@ def summarize_street_consensus(commentary: list[dict[str, Any]]) -> str:
             f"Headline: {item.get('title', '')}\n"
             f"Published: {item.get('published', '')}\n"
             f"Source: {item.get('link', '')}\n"
-            f"Content: {(item.get('article_text') or item.get('snippet') or '')[:900]}"
+            f"Content: {(item.get('article_text') or item.get('snippet') or '')}"
         )
-        for item in commentary[:60]
+        for item in commentary
     )
     try:
         summary = generate_response(MACRO_CONSENSUS_PROMPT, payload, max_tokens=800)
@@ -223,7 +214,7 @@ def run_committee(
     """Run the 4-stage committee and return all outputs.
 
     Keys: analysts (fundamental/sentiment/technical), pm_initial, devil, final,
-    verdict, conviction, summary, risks.
+    verdict, summary, risks.
     """
 
     def notify(stage: str, status: str, preview: str | None = None) -> None:
@@ -235,19 +226,20 @@ def run_committee(
             f"Headline: {n.get('title', '')}\n"
             f"Published: {n.get('published', '')}\n"
             f"Source: {n.get('link', '')}\n"
-            f"Content: {(n.get('article_text') or n.get('snippet') or '')[:1200]}"
+            f"Content: {(n.get('article_text') or n.get('snippet') or '')}"
         )
         for n in news
     ) or "No recent news available."
     full_fundamentals_json = json.dumps(fundamentals, indent=2, default=str)
+    technical_summary_json = json.dumps(fundamentals.get("technical_summary", {}), indent=2, default=str)
     macro_items_text = "\n\n".join(
         (
             f"Headline: {item.get('title', '')}\n"
             f"Published: {item.get('published', '')}\n"
             f"Source: {item.get('link', '')}\n"
-            f"Content: {(item.get('article_text') or item.get('snippet') or '')[:800]}"
+            f"Content: {(item.get('article_text') or item.get('snippet') or '')}"
         )
-        for item in (macro_commentary or [])[:8]
+        for item in (macro_commentary or [])
     )
     macro_context = (
         f"Street macro consensus:\n{macro_summary or 'N/A'}\n\nStreet macro commentary items:\n"
@@ -268,7 +260,7 @@ def run_committee(
         ),
         "technical": (
             TECHNICAL_PROMPT,
-            f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}",
+            f"Ticker: {ticker}\n\n{macro_context}\n\nTechnical summary JSON:\n{technical_summary_json}",
             600,
         ),
     }
@@ -292,7 +284,7 @@ def run_committee(
     notify("pm", "start")
     pm_initial = generate_response(
         PM_PROMPT,
-        f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n{reports}",
+        f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n{reports}",
         max_tokens=500,
     )
     pm_verdict = _parse_pm_verdict(pm_initial)
@@ -302,7 +294,7 @@ def run_committee(
     notify("devil", "start")
     devil = generate_response(
         DEVIL_PROMPT,
-        f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
+        f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
         f"You MUST defend this opposite verdict: {required_opposite}.\n\n"
         f"{reports}\n\n## PM Initial Ruling\n{pm_initial}",
         max_tokens=600,
@@ -312,21 +304,20 @@ def run_committee(
     notify("final", "start")
     final = generate_response(
         FINAL_PROMPT,
-        f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
+        f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
         f"{reports}\n\n## PM Initial Ruling\n{pm_initial}\n\n"
         f"## Devil's Advocate\n{devil}",
         max_tokens=900,
     )
     notify("final", "done", _first_sentences(final))
 
-    verdict, conviction = parse_verdict(final)
+    verdict = parse_verdict(final)
     return {
         "analysts": analysts,
         "pm_initial": pm_initial,
         "devil": devil,
         "final": final,
         "verdict": verdict,
-        "conviction": conviction,
         "summary": extract_section(final, "Executive Summary") or final,
         "risks": extract_section(final, "Key Risks"),
     }
@@ -337,7 +328,7 @@ def build_report(ticker: str, result: dict[str, Any]) -> str:
     a = result["analysts"]
     return (
         f"# {ticker} Investment Committee Report\n\n"
-        f"**Verdict:** {result['verdict']}  \n**Conviction:** {result['conviction']}\n\n"
+        f"**Verdict:** {result['verdict']}\n\n"
         f"## Final Committee Decision\n{result['final']}\n\n"
         f"## Analyst Research\n### Fundamental Analyst\n{a['fundamental']}\n\n"
         f"### Sentiment Analyst\n{a['sentiment']}\n\n### Technical Analyst\n{a['technical']}\n\n"

@@ -39,7 +39,6 @@ STREET_COMMENTARY_QUERIES = [
 ]
 STREET_COMMENTARY_URL = "https://news.google.com/rss/search?q={query}"
 ARTICLE_TIMEOUT_SECONDS = 8
-ARTICLE_MAX_CHARS = 3500
 
 
 def _num(value: Any) -> float | None:
@@ -180,11 +179,11 @@ def _extract_ldjson_text(soup: BeautifulSoup) -> str:
                         stack.append(value)
             elif isinstance(node, list):
                 stack.extend(node)
-    return best[:ARTICLE_MAX_CHARS]
+    return best
 
 
 def _sanitize_article_text(text: str, fallback: str) -> str:
-    cleaned = _clean_text(text)[:ARTICLE_MAX_CHARS]
+    cleaned = _clean_text(text)
     if not cleaned:
         return fallback
     if "Comprehensive, up-to-date news coverage" in cleaned:
@@ -269,6 +268,160 @@ def _enrich_google_entry(entry: Any) -> dict[str, str]:
     }
 
 
+def _build_technical_payload(historical_payload: Any) -> dict[str, Any]:
+    rows = historical_payload if isinstance(historical_payload, list) else []
+    if not rows:
+        return {"technical_summary": {"error": "No historical price payload returned"}, "technical_chart": []}
+
+    df = pd.DataFrame(rows)
+    required = {"date", "high", "low", "close", "volume"}
+    if not required.issubset(df.columns):
+        return {
+            "technical_summary": {"error": f"Missing technical columns: {sorted(required - set(df.columns))}"},
+            "technical_chart": [],
+        }
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    for col in ("high", "low", "close", "volume"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df.dropna(subset=["date", "high", "low", "close", "volume"]).sort_values("date")
+    if len(df) < 200:
+        return {
+            "technical_summary": {"error": f"Insufficient price history ({len(df)} rows)"},
+            "technical_chart": [],
+        }
+
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    volume = df["volume"]
+    returns = close.pct_change()
+
+    sma_20 = close.rolling(20).mean()
+    sma_50 = close.rolling(50).mean()
+    sma_100 = close.rolling(100).mean()
+    sma_200 = close.rolling(200).mean()
+    ema_12 = close.ewm(span=12, adjust=False).mean()
+    ema_21 = close.ewm(span=21, adjust=False).mean()
+    ema_26 = close.ewm(span=26, adjust=False).mean()
+    ema_50 = close.ewm(span=50, adjust=False).mean()
+
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
+    rs = gain / loss
+    rsi_series = 100 - (100 / (1 + rs))
+    rsi_14 = rsi_series.iloc[-1]
+
+    macd_line = ema_12 - ema_26
+    macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+    macd_hist = macd_line - macd_signal
+
+    std_20 = close.rolling(20).std()
+    bb_upper = sma_20 + (2 * std_20)
+    bb_lower = sma_20 - (2 * std_20)
+    bb_width = (bb_upper - bb_lower) / sma_20
+    bb_position = (close - bb_lower) / (bb_upper - bb_lower)
+
+    lowest_14 = low.rolling(14).min()
+    highest_14 = high.rolling(14).max()
+    stoch_k = ((close - lowest_14) / (highest_14 - lowest_14)) * 100
+    stoch_d = stoch_k.rolling(3).mean()
+
+    tr_components = pd.concat(
+        [
+            (high - low).abs(),
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    )
+    true_range = tr_components.max(axis=1)
+    atr_14 = true_range.rolling(14).mean()
+
+    vol_20_ma = volume.rolling(20).mean().iloc[-1]
+    current_vol = float(volume.iloc[-1])
+    curr_price = float(close.iloc[-1])
+    sma_200_last = float(sma_200.iloc[-1])
+    price_vs_sma200 = ((curr_price - sma_200_last) / sma_200_last) * 100 if sma_200_last else None
+    volume_vs_20d = ((current_vol - vol_20_ma) / vol_20_ma) * 100 if vol_20_ma else None
+    volatility_20d = returns.rolling(20).std().iloc[-1] * (252**0.5) * 100
+
+    momentum_21d = ((close.iloc[-1] / close.iloc[-22]) - 1) * 100 if len(close) > 22 else None
+    momentum_63d = ((close.iloc[-1] / close.iloc[-64]) - 1) * 100 if len(close) > 64 else None
+    momentum_126d = ((close.iloc[-1] / close.iloc[-127]) - 1) * 100 if len(close) > 127 else None
+    momentum_252d = ((close.iloc[-1] / close.iloc[-253]) - 1) * 100 if len(close) > 253 else None
+
+    chart_df = pd.DataFrame(
+        {
+            "date": df["date"].dt.strftime("%Y-%m-%d"),
+            "close": close.round(2),
+            "sma_20": sma_20.round(2),
+            "sma_50": sma_50.round(2),
+            "sma_100": sma_100.round(2),
+            "sma_200": sma_200.round(2),
+            "ema_21": ema_21.round(2),
+            "ema_50": ema_50.round(2),
+            "rsi_14": rsi_series.round(2),
+            "macd": macd_line.round(4),
+            "macd_signal": macd_signal.round(4),
+            "macd_hist": macd_hist.round(4),
+        }
+    ).dropna(subset=["sma_200"])
+
+    return {
+        "technical_summary": {
+            "rows_used": int(len(df)),
+            "start_date": str(df["date"].iloc[0].date()),
+            "end_date": str(df["date"].iloc[-1].date()),
+            "current_price": round(curr_price, 2),
+            "52w_high": round(float(high.tail(252).max()), 2),
+            "52w_low": round(float(low.tail(252).min()), 2),
+            "sma_20": round(float(sma_20.iloc[-1]), 2),
+            "sma_50": round(float(sma_50.iloc[-1]), 2),
+            "sma_100": round(float(sma_100.iloc[-1]), 2),
+            "sma_200": round(sma_200_last, 2),
+            "ema_21": round(float(ema_21.iloc[-1]), 2),
+            "ema_50": round(float(ema_50.iloc[-1]), 2),
+            "price_vs_sma200_pct": round(price_vs_sma200, 2) if price_vs_sma200 is not None else None,
+            "price_vs_sma50_pct": round(((curr_price - float(sma_50.iloc[-1])) / float(sma_50.iloc[-1])) * 100, 2),
+            "ma_alignment": (
+                "Bullish (SMA50 > SMA200)"
+                if float(sma_50.iloc[-1]) > sma_200_last
+                else "Bearish (SMA50 < SMA200)"
+            ),
+            "rsi_14": round(float(rsi_14), 2),
+            "rsi_condition": (
+                "Overbought (>70)"
+                if float(rsi_14) > 70
+                else ("Oversold (<30)" if float(rsi_14) < 30 else "Neutral (30-70)")
+            ),
+            "macd": round(float(macd_line.iloc[-1]), 4),
+            "macd_signal": round(float(macd_signal.iloc[-1]), 4),
+            "macd_histogram": round(float(macd_hist.iloc[-1]), 4),
+            "macd_trend": "Bullish (MACD > Signal)" if float(macd_line.iloc[-1]) > float(macd_signal.iloc[-1]) else "Bearish (MACD < Signal)",
+            "atr_14": round(float(atr_14.iloc[-1]), 2),
+            "atr_14_pct_price": round((float(atr_14.iloc[-1]) / curr_price) * 100, 2),
+            "bollinger_upper_20_2": round(float(bb_upper.iloc[-1]), 2),
+            "bollinger_lower_20_2": round(float(bb_lower.iloc[-1]), 2),
+            "bollinger_bandwidth_pct": round(float(bb_width.iloc[-1]) * 100, 2),
+            "bollinger_position_pct": round(float(bb_position.iloc[-1]) * 100, 2),
+            "stoch_k_14": round(float(stoch_k.iloc[-1]), 2),
+            "stoch_d_3": round(float(stoch_d.iloc[-1]), 2),
+            "momentum_1m_pct": round(float(momentum_21d), 2) if momentum_21d is not None else None,
+            "momentum_3m_pct": round(float(momentum_63d), 2) if momentum_63d is not None else None,
+            "momentum_6m_pct": round(float(momentum_126d), 2) if momentum_126d is not None else None,
+            "momentum_12m_pct": round(float(momentum_252d), 2) if momentum_252d is not None else None,
+            "volatility_20d_annualized_pct": round(float(volatility_20d), 2),
+            "distance_to_52w_high_pct": round(((curr_price / float(high.tail(252).max())) - 1) * 100, 2),
+            "distance_to_52w_low_pct": round(((curr_price / float(low.tail(252).min())) - 1) * 100, 2),
+            "daily_return_pct": round(float(returns.iloc[-1]) * 100, 2) if not pd.isna(returns.iloc[-1]) else None,
+            "volume_vs_20d_ma_pct": round(float(volume_vs_20d), 2) if volume_vs_20d is not None else None,
+        },
+        "technical_chart": chart_df.tail(300).to_dict(orient="records"),
+    }
+
+
 def get_stock_fundamentals_raw(ticker: str) -> dict:
     """Fetch full, unmodified fundamentals payloads from FMP stable endpoints."""
     symbol = ticker.strip().upper()
@@ -276,7 +429,7 @@ def get_stock_fundamentals_raw(ticker: str) -> dict:
         return {"ticker": symbol, "error": "Ticker is required."}
 
     try:
-        return {
+        payload = {
             "ticker": symbol,
             "profile": _fmp_get("/profile", {"symbol": symbol}, base_url=FMP_STABLE_BASE_URL),
             "income_statement": _fmp_get(
@@ -304,9 +457,19 @@ def get_stock_fundamentals_raw(ticker: str) -> dict:
                 {"symbol": symbol},
                 base_url=FMP_STABLE_BASE_URL,
             ),
+            "historical_price_eod": _fmp_get(
+                "/historical-price-eod/full",
+                {"symbol": symbol},
+                base_url=FMP_STABLE_BASE_URL,
+            ),
         }
     except Exception as exc:
         return {"ticker": symbol, "error": f"Failed to fetch fundamentals: {exc}"}
+
+    technical = _build_technical_payload(payload["historical_price_eod"])
+    payload["technical_summary"] = technical["technical_summary"]
+    payload["technical_chart"] = technical["technical_chart"]
+    return payload
 
 
 def get_stock_fundamentals(ticker: str) -> dict:
@@ -333,14 +496,14 @@ def get_latest_news(ticker: str, limit: int = 8) -> list[dict]:
     return [item for item in enriched if item.get("title")]
 
 
-def get_street_commentary(limit: int = 60) -> list[dict]:
+def get_street_commentary(limit: int = 30) -> list[dict]:
     """Fetch recent macro commentary items from major street institutions."""
     max_items = max(limit, 0)
     if max_items == 0:
         return []
 
     entries: list[Any] = []
-    per_query_limit = 20
+    per_query_limit = 10
     for query in STREET_COMMENTARY_QUERIES:
         try:
             feed = feedparser.parse(STREET_COMMENTARY_URL.format(query=quote_plus(query)))
