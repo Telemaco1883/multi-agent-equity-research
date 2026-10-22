@@ -16,7 +16,6 @@ from bs4 import BeautifulSoup
 import config
 
 FMP_STABLE_BASE_URL = "https://financialmodelingprep.com/stable"
-FMP_V3_BASE_URL = "https://financialmodelingprep.com/api/v3"
 NEWS_URL = "https://news.google.com/rss/search?q={ticker}+stock"
 STREET_COMMENTARY_QUERIES = [
     (
@@ -54,19 +53,6 @@ def _num(value: Any) -> float | None:
         return None
 
 
-def _rsi(close: pd.Series, period: int = 14) -> float | None:
-    """Compute the Wilder RSI of a closing-price series."""
-    if len(close) <= period:
-        return None
-    delta = close.diff()
-    gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
-    last_gain, last_loss = gain.iloc[-1], loss.iloc[-1]
-    if last_loss == 0:
-        return 100.0
-    return float(100 - 100 / (1 + last_gain / last_loss))
-
-
 def _pick_number(*values: Any) -> float | None:
     for value in values:
         n = _num(value)
@@ -75,16 +61,16 @@ def _pick_number(*values: Any) -> float | None:
     return None
 
 
-def _safe_div(numerator: float | None, denominator: float | None) -> float | None:
-    if numerator is None or denominator in (None, 0):
-        return None
-    return numerator / denominator
-
-
-def _pct_growth(latest: float | None, previous: float | None) -> float | None:
-    if latest is None or previous in (None, 0):
-        return None
-    return (latest - previous) / abs(previous)
+def _parse_range_low_high(range_text: Any) -> tuple[float | None, float | None]:
+    raw = str(range_text or "").strip()
+    if not raw:
+        return None, None
+    match = re.search(r"(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)", raw)
+    if not match:
+        return None, None
+    low = _num(match.group(1))
+    high = _num(match.group(2))
+    return low, high
 
 
 def _fmp_get(
@@ -132,6 +118,27 @@ def _first_record(payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
     return {}
+
+
+def _fmp_get_optional(path: str, params: dict[str, Any] | None = None) -> Any:
+    try:
+        return _fmp_get(path, params, base_url=FMP_STABLE_BASE_URL)
+    except RuntimeError as exc:
+        # Keep paid/entitlement endpoint failures non-fatal.
+        if "HTTP 402" in str(exc):
+            return None
+        return None
+
+
+def _latest_statement(payload: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(payload, list):
+        return {}, {}
+    rows = [row for row in payload if isinstance(row, dict)]
+    if not rows:
+        return {}, {}
+    latest = rows[0]
+    prior = rows[1] if len(rows) > 1 else {}
+    return latest, prior
 
 
 def _clean_text(text: str) -> str:
@@ -272,190 +279,162 @@ def _enrich_google_entry(entry: Any) -> dict[str, str]:
     }
 
 
-def _fmp_get_optional(
-    path: str,
-    params: dict[str, Any] | None = None,
-    *,
-    base_url: str,
-    default: Any,
-) -> Any:
-    try:
-        return _fmp_get(path, params, base_url=base_url)
-    except Exception:
-        return default
-
-
 def get_stock_fundamentals(ticker: str) -> dict:
-    """Pull valuation, margins, growth, balance sheet and technical data via FMP API."""
+    """Pull valuation, margins, growth, balance sheet and technical data via FMP stable APIs."""
     ticker = ticker.strip().upper()
     if not ticker:
         return {"ticker": ticker, "error": "Ticker is required."}
 
-    symbol_params = {"symbol": ticker}
-    encoded = quote_plus(ticker)
-
-    quote = _first_record(
-        _fmp_get_optional("/quote", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
-    ) or _first_record(
-        _fmp_get_optional(f"/quote/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
-    )
-    profile = _first_record(
-        _fmp_get_optional("/profile", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
-    ) or _first_record(
-        _fmp_get_optional(f"/profile/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
-    )
-    metrics_ttm = _first_record(
-        _fmp_get_optional("/key-metrics-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
-    ) or _first_record(
-        _fmp_get_optional(f"/key-metrics-ttm/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
-    )
-    ratios_ttm = _first_record(
-        _fmp_get_optional("/ratios-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
-    ) or _first_record(
-        _fmp_get_optional(f"/ratios-ttm/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
-    )
-
-    income = _fmp_get_optional(
-        "/income-statement",
-        {**symbol_params, "limit": 2},
-        base_url=FMP_STABLE_BASE_URL,
-        default=[],
-    ) or _fmp_get_optional(
-        f"/income-statement/{encoded}",
-        {"limit": 2},
-        base_url=FMP_V3_BASE_URL,
-        default=[],
-    )
-    balance = _fmp_get_optional(
-        "/balance-sheet-statement",
-        {**symbol_params, "limit": 1},
-        base_url=FMP_STABLE_BASE_URL,
-        default=[],
-    ) or _fmp_get_optional(
-        f"/balance-sheet-statement/{encoded}",
-        {"limit": 1},
-        base_url=FMP_V3_BASE_URL,
-        default=[],
-    )
-    cashflow = _fmp_get_optional(
-        "/cash-flow-statement",
-        {**symbol_params, "limit": 1},
-        base_url=FMP_STABLE_BASE_URL,
-        default=[],
-    ) or _fmp_get_optional(
-        f"/cash-flow-statement/{encoded}",
-        {"limit": 1},
-        base_url=FMP_V3_BASE_URL,
-        default=[],
-    )
-    price_history = _fmp_get_optional(
-        "/historical-price-eod/full",
-        symbol_params,
-        base_url=FMP_STABLE_BASE_URL,
-        default=[],
-    )
-    if not price_history:
-        price_history = _fmp_get_optional(
-            f"/historical-price-full/{encoded}",
-            {"serietype": "line"},
-            base_url=FMP_V3_BASE_URL,
-            default={},
+    try:
+        profile = _first_record(
+            _fmp_get("/profile", {"symbol": ticker}, base_url=FMP_STABLE_BASE_URL)
         )
+    except Exception as exc:
+        return {"ticker": ticker, "error": f"Failed to fetch market data: {exc}"}
 
-    if isinstance(price_history, dict):
-        historical = price_history.get("historical", [])
-    elif isinstance(price_history, list):
-        historical = price_history
-    else:
-        historical = []
-    close = pd.to_numeric(
-        pd.Series([entry.get("close") for entry in historical if isinstance(entry, dict)]),
-        errors="coerce",
-    ).dropna()
-    if close.empty:
-        fallback_price = _pick_number(quote.get("price"), profile.get("price"))
-        if fallback_price is not None:
-            close = pd.Series([fallback_price], dtype="float64")
-        else:
-            return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
+    if not profile:
+        return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
 
-    income_rows = [row for row in income if isinstance(row, dict)] if isinstance(income, list) else []
-    latest_income = income_rows[0] if income_rows else {}
-    previous_income = income_rows[1] if len(income_rows) > 1 else {}
-    latest_balance = _first_record(balance)
-    latest_cashflow = _first_record(cashflow)
-
-    revenue = _pick_number(latest_income.get("revenue"))
-    revenue_prev = _pick_number(previous_income.get("revenue"))
-    net_income = _pick_number(latest_income.get("netIncome"))
-    net_income_prev = _pick_number(previous_income.get("netIncome"))
-    gross_profit = _pick_number(latest_income.get("grossProfit"))
-    operating_income = _pick_number(latest_income.get("operatingIncome"))
-    total_cash = _pick_number(
-        latest_balance.get("cashAndCashEquivalents"),
-        latest_balance.get("cashAndShortTermInvestments"),
+    income_payload = _fmp_get_optional(
+        "/income-statement",
+        {"symbol": ticker, "period": "annual", "limit": 2},
     )
-    total_debt = _pick_number(latest_balance.get("totalDebt"))
-    total_equity = _pick_number(latest_balance.get("totalStockholdersEquity"))
-    current_assets = _pick_number(latest_balance.get("totalCurrentAssets"))
-    current_liabilities = _pick_number(latest_balance.get("totalCurrentLiabilities"))
-    free_cash_flow = _pick_number(latest_cashflow.get("freeCashFlow"))
-    debt_to_equity_ratio = _safe_div(total_debt, total_equity)
+    balance_payload = _fmp_get_optional(
+        "/balance-sheet-statement",
+        {"symbol": ticker, "period": "annual", "limit": 2},
+    )
+    cashflow_payload = _fmp_get_optional(
+        "/cash-flow-statement",
+        {"symbol": ticker, "period": "annual", "limit": 2},
+    )
+    ratios_payload = _fmp_get_optional("/ratios-ttm", {"symbol": ticker}) or _fmp_get_optional(
+        "/ratios", {"symbol": ticker, "period": "annual", "limit": 1}
+    )
+    metrics_payload = _fmp_get_optional("/key-metrics-ttm", {"symbol": ticker}) or _fmp_get_optional(
+        "/key-metrics", {"symbol": ticker, "period": "annual", "limit": 1}
+    )
+
+    income_latest, income_prior = _latest_statement(income_payload)
+    balance_latest, _ = _latest_statement(balance_payload)
+    cashflow_latest, _ = _latest_statement(cashflow_payload)
+
+    ratios = _first_record(ratios_payload)
+    metrics = _first_record(metrics_payload)
+
+    revenue = _pick_number(income_latest.get("revenue"))
+    prior_revenue = _pick_number(income_prior.get("revenue"))
+    net_income = _pick_number(income_latest.get("netIncome"))
+    prior_net_income = _pick_number(income_prior.get("netIncome"))
+
+    revenue_growth = None
+    if revenue is not None and prior_revenue not in (None, 0):
+        revenue_growth = (revenue / prior_revenue) - 1.0
+    earnings_growth = None
+    if net_income is not None and prior_net_income not in (None, 0):
+        earnings_growth = (net_income / prior_net_income) - 1.0
+
+    gross_margin = _pick_number(ratios.get("grossProfitMarginTTM"), ratios.get("grossProfitMargin"))
+    if gross_margin is None:
+        gp = _pick_number(income_latest.get("grossProfit"))
+        if gp is not None and revenue not in (None, 0):
+            gross_margin = gp / revenue
+
+    operating_margin = _pick_number(
+        ratios.get("operatingProfitMarginTTM"), ratios.get("operatingProfitMargin")
+    )
+    if operating_margin is None:
+        operating_income = _pick_number(income_latest.get("operatingIncome"))
+        if operating_income is not None and revenue not in (None, 0):
+            operating_margin = operating_income / revenue
+
+    net_margin = _pick_number(ratios.get("netProfitMarginTTM"), ratios.get("netProfitMargin"))
+    if net_margin is None and net_income is not None and revenue not in (None, 0):
+        net_margin = net_income / revenue
+
+    total_equity = _pick_number(
+        balance_latest.get("totalStockholdersEquity"),
+        balance_latest.get("totalEquity"),
+    )
+    total_debt = _pick_number(balance_latest.get("totalDebt"))
+    debt_to_equity = _pick_number(
+        ratios.get("debtToEquityRatioTTM"),
+        ratios.get("debtEquityRatio"),
+        ratios.get("debtToEquityRatio"),
+    )
+    if debt_to_equity is None and total_debt is not None and total_equity not in (None, 0):
+        debt_to_equity = total_debt / total_equity
+
+    current_ratio = _pick_number(ratios.get("currentRatioTTM"), ratios.get("currentRatio"))
+    if current_ratio is None:
+        current_assets = _pick_number(balance_latest.get("totalCurrentAssets"))
+        current_liabilities = _pick_number(balance_latest.get("totalCurrentLiabilities"))
+        if current_assets is not None and current_liabilities not in (None, 0):
+            current_ratio = current_assets / current_liabilities
+
+    free_cash_flow = _pick_number(cashflow_latest.get("freeCashFlow"))
+    if free_cash_flow is None:
+        op_cf = _pick_number(cashflow_latest.get("operatingCashFlow"))
+        capex = _pick_number(cashflow_latest.get("capitalExpenditure"))
+        if op_cf is not None:
+            free_cash_flow = op_cf + capex if capex is not None else op_cf
+
+    price = _pick_number(profile.get("price"))
+    year_low, year_high = _parse_range_low_high(profile.get("range"))
 
     return {
         "ticker": ticker,
-        "name": profile.get("companyName") or quote.get("name") or ticker,
+        "name": profile.get("companyName") or ticker,
         "sector": profile.get("sector"),
         "industry": profile.get("industry"),
-        "price": _pick_number(quote.get("price"), close.iloc[-1] if len(close) else None),
-        "market_cap": _pick_number(quote.get("marketCap")),
+        "price": price,
+        "market_cap": _pick_number(profile.get("marketCap")),
         "valuation": {
-            "trailing_pe": _pick_number(quote.get("pe"), ratios_ttm.get("priceToEarningsRatioTTM")),
-            "forward_pe": _pick_number(quote.get("pe")),  # FMP free endpoints usually expose trailing only.
-            "ev_to_ebitda": _pick_number(metrics_ttm.get("enterpriseValueOverEBITDATTM")),
-            "price_to_sales": _pick_number(
-                quote.get("priceToSalesRatio"),
-                ratios_ttm.get("priceToSalesRatioTTM"),
+            "trailing_pe": _pick_number(
+                ratios.get("priceEarningsRatioTTM"),
+                ratios.get("priceEarningsRatio"),
+                profile.get("pe"),
             ),
-            "peg_ratio": _pick_number(ratios_ttm.get("priceEarningsToGrowthRatioTTM")),
+            "forward_pe": _pick_number(ratios.get("forwardPE"), metrics.get("forwardPE")),
+            "ev_to_ebitda": _pick_number(
+                metrics.get("evToEBITDATTM"),
+                metrics.get("enterpriseValueOverEBITDATTM"),
+                metrics.get("evToEbitda"),
+            ),
+            "price_to_sales": _pick_number(
+                ratios.get("priceToSalesRatioTTM"),
+                ratios.get("priceToSalesRatio"),
+                profile.get("priceToSalesRatio"),
+            ),
+            "peg_ratio": _pick_number(
+                ratios.get("priceToEarningsGrowthRatioTTM"),
+                ratios.get("pegRatio"),
+            ),
         },
         "margins": {
-            "gross": _pick_number(
-                ratios_ttm.get("grossProfitMarginTTM"),
-                _safe_div(gross_profit, revenue),
-            ),
-            "operating": _pick_number(
-                ratios_ttm.get("operatingProfitMarginTTM"),
-                _safe_div(operating_income, revenue),
-            ),
-            "net": _pick_number(
-                ratios_ttm.get("netProfitMarginTTM"),
-                _safe_div(net_income, revenue),
-            ),
+            "gross": gross_margin,
+            "operating": operating_margin,
+            "net": net_margin,
         },
         "growth": {
-            "revenue_growth": _pick_number(_pct_growth(revenue, revenue_prev)),
-            "earnings_growth": _pick_number(_pct_growth(net_income, net_income_prev)),
+            "revenue_growth": revenue_growth,
+            "earnings_growth": earnings_growth,
         },
         "balance_sheet": {
-            "total_cash": total_cash,
+            "total_cash": _pick_number(
+                balance_latest.get("cashAndCashEquivalents"),
+                balance_latest.get("cashAndShortTermInvestments"),
+            ),
             "total_debt": total_debt,
-            "debt_to_equity": _pick_number(
-                ratios_ttm.get("debtEquityRatioTTM"),
-                debt_to_equity_ratio * 100 if debt_to_equity_ratio is not None else None,
-            ),
-            "current_ratio": _pick_number(
-                ratios_ttm.get("currentRatioTTM"),
-                _safe_div(current_assets, current_liabilities),
-            ),
+            "debt_to_equity": debt_to_equity,
+            "current_ratio": current_ratio,
             "free_cash_flow": free_cash_flow,
         },
         "technicals": {
-            "ma_50": _num(close.tail(50).mean()) if len(close) >= 50 else None,
-            "ma_200": _num(close.tail(200).mean()) if len(close) >= 200 else None,
-            "rsi_14": _rsi(close),
-            "52w_high": _pick_number(quote.get("yearHigh"), _num(close.max())),
-            "52w_low": _pick_number(quote.get("yearLow"), _num(close.min())),
+            "ma_50": _pick_number(profile.get("priceAvg50")),
+            "ma_200": _pick_number(profile.get("priceAvg200")),
+            "rsi_14": None,
+            "52w_high": year_high,
+            "52w_low": year_low,
         },
     }
 
