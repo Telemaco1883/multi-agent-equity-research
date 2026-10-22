@@ -26,10 +26,12 @@ Rules:
 
 Output exactly this structure:
 ## Fundamental Analyst
-**Pros (2 bullets):**
+**Pros (3 bullets):**
 - ...
 - ...
-**Cons (2 bullets):**
+- ...
+**Cons (3 bullets):**
+- ...
 - ...
 - ...
 **Stance:** Bullish | Neutral | Bearish
@@ -56,10 +58,12 @@ Rules:
 
 Output exactly this structure:
 ## Sentiment Analyst
-**Pros (2 bullets):**
+**Pros (3 bullets):**
 - ...
 - ...
-**Cons (2 bullets):**
+- ...
+**Cons (3 bullets):**
+- ...
 - ...
 - ...
 **Stance:** Risk-On | Neutral | Risk-Off
@@ -91,10 +95,12 @@ Rules:
 
 Output exactly this structure:
 ## Technical Analyst
-**Pros (2 bullets):**
+**Pros (3 bullets):**
 - ...
 - ...
-**Cons (2 bullets):**
+- ...
+**Cons (3 bullets):**
+- ...
 - ...
 - ...
 **Stance:** Bullish | Neutral | Bearish
@@ -124,6 +130,7 @@ PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "
     "into an initial recommendation using ONLY provided content. Think deeply, but output only final result.\n"
     "HOLD/NEUTRAL are invalid for this stage.\n"
+    "You MUST explicitly incorporate street macro consensus in at least one reasoning bullet.\n"
     "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Be explicit, logical, and detailed. Every bullet must contain a clear claim -> evidence -> implication chain.\n"
     "Output EXACTLY this format:\n"
@@ -151,6 +158,7 @@ PM_PROMPT = (
 DEVIL_PROMPT = (
     "You are the Devil's Advocate. Defend the forced opposite verdict with the strongest possible case "
     "using ONLY provided content. Think deeply, but output only final result.\n"
+    "You MUST explicitly incorporate street macro consensus in at least one reasoning bullet.\n"
     "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Be explicit, logical, and detailed. Every bullet must contain a clear claim -> evidence -> implication chain.\n"
     "Output EXACTLY this format:\n"
@@ -173,6 +181,7 @@ DEVIL_PROMPT = (
 FINAL_PROMPT = (
     "You are the Portfolio Manager delivering the final Investment Committee verdict after reviewing "
     "the Devil's Advocate challenge. Use only provided content and output a structured final decision.\n"
+    "You MUST explicitly address street macro consensus in the Executive Summary.\n"
     "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL|NEUTRAL\n"
@@ -223,10 +232,10 @@ def _first_sentences(text: str, max_sentences: int = 2) -> str:
 def _normalize_structured_sections(text: str) -> str:
     cleaned = (text or "").replace("\r\n", "\n").strip()
     cleaned = re.sub(r"\b(VERDICT:\s*(?:BUY|SELL|NEUTRAL|HOLD))\s+(?=[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", r"\1\n\n", cleaned)
+    cleaned = re.sub(r"(?i)RISKS\s+TO\s+THESIS:", "__RISKS_TO_THESIS__", cleaned)
     headings = [
         "CORE LOGIC:",
         "SUPPORTING EVIDENCE:",
-        "RISKS TO THESIS:",
         "THESIS:",
         "COUNTER-THESIS:",
         "COUNTER-EVIDENCE:",
@@ -238,6 +247,7 @@ def _normalize_structured_sections(text: str) -> str:
     ]
     for heading in headings:
         cleaned = re.sub(rf"\s*{re.escape(heading)}\s*", f"\n\n{heading}\n", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.replace("__RISKS_TO_THESIS__", "\n\nRISKS TO THESIS:\n")
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
 
@@ -394,7 +404,7 @@ def run_committee(
     notify("pm", "start")
     pm_initial = generate_response(
         PM_PROMPT,
-        f"Ticker: {ticker}\n\nAnalyst summaries:\n{reports}",
+        f"Ticker: {ticker}\n\nStreet macro consensus:\n{macro_summary or 'N/A'}\n\nAnalyst summaries:\n{reports}",
         max_tokens=900,
     )
     pm_initial = _normalize_structured_sections(pm_initial)
@@ -405,7 +415,7 @@ def run_committee(
     notify("devil", "start")
     devil = generate_response(
         DEVIL_PROMPT,
-        f"Ticker: {ticker}\n\nAnalyst summaries:\n{reports}\n\n"
+        f"Ticker: {ticker}\n\nStreet macro consensus:\n{macro_summary or 'N/A'}\n\nAnalyst summaries:\n{reports}\n\n"
         f"You MUST defend this opposite verdict: {required_opposite}.\n\n"
         f"## PM Initial Ruling\n{pm_initial}",
         max_tokens=1000,

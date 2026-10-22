@@ -70,7 +70,7 @@ def _render_ticker_data(
     macro_commentary: list[dict],
     result: dict | None = None,
 ) -> None:
-    with st.expander("1) Street macro consensus", expanded=True):
+    with st.expander("1) Street macro consensus", expanded=False):
         st.write(macro_summary or "No street macro commentary summary available.")
         if macro_commentary:
             with st.expander("Street macro source headlines", expanded=False):
@@ -80,7 +80,7 @@ def _render_ticker_data(
                         f" ({item.get('published', '')})"
                     )
 
-    with st.expander("2) Raw downloaded data", expanded=True):
+    with st.expander("2) Raw downloaded data", expanded=False):
         tech_summary = fundamentals.get("technical_summary")
         if tech_summary:
             st.markdown("**Technical summary**")
@@ -104,7 +104,7 @@ def _render_ticker_data(
     if not result:
         return
 
-    with st.expander("3) Fundamental analyst", expanded=True):
+    with st.expander("3) Fundamental analyst", expanded=False):
         st.write(result["analysts"]["fundamental"])
     with st.expander("4) Sentiment analyst", expanded=False):
         st.write(result["analysts"]["sentiment"])
@@ -115,7 +115,7 @@ def _render_ticker_data(
         st.markdown(result["pm_initial"])
     with st.expander("7) Devil's advocate", expanded=False):
         st.markdown(result["devil"])
-    with st.expander("8) Investment committee decision", expanded=True):
+    with st.expander("8) Investment committee decision", expanded=False):
         color = COLORS.get(result["verdict"], "gray")
         st.markdown(f"**Verdict:** :{color}[{result['verdict']}]")
         st.markdown(result["final"])
