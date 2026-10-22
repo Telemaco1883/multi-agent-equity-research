@@ -25,13 +25,13 @@ TECHNICAL_PROMPT = (
 )
 MACRO_CONSENSUS_PROMPT = """
 You are a Senior Global Macro Strategist at an institutional asset management firm.
-Synthesize the prevailing Street consensus across major asset classes based SOLELY on the provided market commentary and article snippets.
+Synthesize the prevailing Street consensus across major asset classes based SOLELY on the provided market commentary and article content.
 
 ### INSTRUCTIONS & CONSTRAINTS:
 1. FOCUS: Synthesize macro/cross-asset views (rate trajectory, central bank policy, macro regime, asset allocation tilts). Ignore single-stock earnings, corporate PR, and retail bank product news.
-2. STRICT GROUNDING: Rely exclusively on substantive snippet text. Do NOT rely on isolated headlines. Do NOT extrapolate or introduce external market priors.
+2. STRICT GROUNDING: Rely exclusively on substantive article content. Do NOT rely on isolated headlines. Do NOT extrapolate or introduce external market priors.
 3. FORMAT INTEGRITY: Output EXACTLY the 5 sections below. Do not add intro/outro text.
-4. EVIDENCE THRESHOLD: If a category lacks concrete commentary in the snippets, state exactly: "Consensus Stance: Insufficient Evidence | Details: No substantive data in provided feeds."
+4. EVIDENCE THRESHOLD: If a category lacks concrete commentary, state exactly: "Consensus Stance: Insufficient Evidence | Details: No substantive market commentary available for this category."
 
 ### OUTPUT TEMPLATE:
 * **Rates & Inflation**: [Consensus Stance: Dovish / Neutral / Hawkish] — Summarize expected rate path, terminal rate/cuts, inflation trajectory, and duration guidance with supporting details.
