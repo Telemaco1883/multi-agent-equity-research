@@ -397,14 +397,14 @@ def get_latest_news(ticker: str, limit: int = 8) -> list[dict]:
     return [item for item in enriched if item.get("title")]
 
 
-def get_street_commentary(limit: int = 20) -> list[dict]:
+def get_street_commentary(limit: int = 60) -> list[dict]:
     """Fetch recent macro commentary items from major street institutions."""
     max_items = max(limit, 0)
     if max_items == 0:
         return []
 
     entries: list[Any] = []
-    per_query_limit = max(max_items, 20)
+    per_query_limit = 20
     for query in STREET_COMMENTARY_QUERIES:
         try:
             feed = feedparser.parse(STREET_COMMENTARY_URL.format(query=quote_plus(query)))

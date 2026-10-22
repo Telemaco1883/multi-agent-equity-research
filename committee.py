@@ -23,14 +23,23 @@ TECHNICAL_PROMPT = (
     "You are a Technical Analyst on an investment committee. Evaluate trend, momentum indicators "
     "(50/200-day MAs, RSI) and key support/resistance levels using ONLY the data provided."
 )
-MACRO_CONSENSUS_PROMPT = (
-    "You are a macro strategist. Summarize the street consensus based ONLY on the commentary "
-    "snippets provided. Focus on ASSET-CLASS level views, not single-bank "
-    "earnings commentary. Output exactly 5 concise bullet points with these labels: "
-    "Rates/Inflation, Equities, Credit, FX/Commodities, and Positioning/Risk Sentiment. "
-    "Use the provided article content snippets as primary evidence (not headlines alone). "
-    "If an area has weak evidence, explicitly say so."
-)
+MACRO_CONSENSUS_PROMPT = """
+You are a Senior Global Macro Strategist at an institutional asset management firm.
+Synthesize the prevailing Street consensus across major asset classes based SOLELY on the provided market commentary and article snippets.
+
+### INSTRUCTIONS & CONSTRAINTS:
+1. FOCUS: Synthesize macro/cross-asset views (rate trajectory, central bank policy, macro regime, asset allocation tilts). Ignore single-stock earnings, corporate PR, and retail bank product news.
+2. STRICT GROUNDING: Rely exclusively on substantive snippet text. Do NOT rely on isolated headlines. Do NOT extrapolate or introduce external market priors.
+3. FORMAT INTEGRITY: Output EXACTLY the 5 sections below. Do not add intro/outro text.
+4. EVIDENCE THRESHOLD: If a category lacks concrete commentary in the snippets, state exactly: "Consensus Stance: Insufficient Evidence | Details: No substantive data in provided feeds."
+
+### OUTPUT TEMPLATE:
+* **Rates & Inflation**: [Consensus Stance: Dovish / Neutral / Hawkish] — Summarize expected rate path, terminal rate/cuts, inflation trajectory, and duration guidance with supporting details.
+* **Equities**: [Consensus Stance: Bullish / Neutral / Bearish] — Summarize market bias (Overweight / Neutral / Underweight), major drivers (growth vs. multiple compression), and regional/sector tilts mentioned.
+* **Credit & Spreads**: [Consensus Stance: Risk-On / Neutral / Risk-Off] — Summarize IG/HY spread direction, refinancing/default concerns, or credit appetite.
+* **FX & Commodities**: [Consensus Stance: USD Strong/Range/Weak | Commodities Bull/Bear] — Summarize Dollar direction, energy/crude outlook, or gold/cyclical metals views.
+* **Positioning & Risk Sentiment**: [Consensus Stance: Crowded / Neutral / Defensive] — Summarize broad institutional positioning, cash balances, and primary macro tail risks cited (e.g., tariffs, stagflation, fiscal supply).
+"""
 PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "
     "into an initial recommendation. Start with exactly two lines:\n"
@@ -175,7 +184,7 @@ def summarize_street_consensus(commentary: list[dict[str, Any]]) -> str:
             f"Source: {item.get('link', '')}\n"
             f"Content: {(item.get('article_text') or item.get('snippet') or '')[:900]}"
         )
-        for item in commentary[:20]
+        for item in commentary[:60]
     )
     try:
         summary = generate_response(MACRO_CONSENSUS_PROMPT, payload, max_tokens=450)
