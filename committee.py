@@ -43,7 +43,7 @@ Synthesize the prevailing Street consensus across major asset classes based SOLE
 PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "
     "into an initial recommendation. Start with exactly two lines:\n"
-    "VERDICT: BUY|HOLD|SELL\nCONVICTION: High|Medium|Low\n"
+    "VERDICT: BUY|SELL\nCONVICTION: High|Medium|Low\n"
     "Then give the key rationale."
 )
 DEVIL_PROMPT = (
@@ -53,7 +53,7 @@ DEVIL_PROMPT = (
 FINAL_PROMPT = (
     "You are the Portfolio Manager delivering the final Investment Committee verdict after reviewing "
     "the Devil's Advocate challenge. Start with exactly two lines:\n"
-    "VERDICT: BUY|HOLD|SELL\nCONVICTION: High|Medium|Low\n"
+    "VERDICT: BUY|SELL|NEUTRAL\nCONVICTION: High|Medium|Low\n"
     "Then provide these sections: Executive Summary, Horizon, Sizing Guidance, Key Risks to Monitor "
     "(bulleted)."
 )
@@ -146,13 +146,21 @@ def _fundamental_response_is_incoherent(response: str, fundamentals: dict[str, A
 
 
 def parse_verdict(text: str) -> tuple[str, str]:
-    """Extract (verdict, conviction) from PM output, defaulting to HOLD / Low."""
-    verdict = re.search(r"VERDICT\W*(BUY|HOLD|SELL)", text, re.IGNORECASE)
+    """Extract (verdict, conviction) from final output, defaulting to NEUTRAL / Low."""
+    verdict = re.search(r"VERDICT\W*(BUY|SELL|NEUTRAL|HOLD)", text, re.IGNORECASE)
     conviction = re.search(r"CONVICTION\W*(High|Medium|Low)", text, re.IGNORECASE)
+    verdict_value = verdict.group(1).upper() if verdict else "NEUTRAL"
+    if verdict_value == "HOLD":
+        verdict_value = "NEUTRAL"
     return (
-        verdict.group(1).upper() if verdict else "HOLD",
+        verdict_value,
         conviction.group(1).capitalize() if conviction else "Low",
     )
+
+
+def _parse_pm_verdict(text: str) -> str:
+    verdict = re.search(r"VERDICT\W*(BUY|SELL)", text, re.IGNORECASE)
+    return verdict.group(1).upper() if verdict else "BUY"
 
 
 def extract_section(text: str, heading: str) -> str:
@@ -231,9 +239,7 @@ def run_committee(
         )
         for n in news
     ) or "No recent news available."
-    raw_fundamentals = fundamentals.get("raw_fmp") or fundamentals
-    fund_json = json.dumps(raw_fundamentals, indent=2, default=str)
-    tech_json = json.dumps(raw_fundamentals, indent=2, default=str)
+    full_fundamentals_json = json.dumps(fundamentals, indent=2, default=str)
     macro_items_text = "\n\n".join(
         (
             f"Headline: {item.get('title', '')}\n"
@@ -252,15 +258,15 @@ def run_committee(
     jobs = {
         "fundamental": (
             FUNDAMENTAL_PROMPT,
-            f"Ticker: {ticker}\n\n{macro_context}\n\nFundamentals:\n{fund_json}",
+            f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}",
         ),
         "sentiment": (
             SENTIMENT_PROMPT,
-            f"Ticker: {ticker}\n\n{macro_context}\n\nRecent news:\n{news_text}",
+            f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\nRecent news:\n{news_text}",
         ),
         "technical": (
             TECHNICAL_PROMPT,
-            f"Ticker: {ticker}\n\n{macro_context}\n\nTechnical data:\n{tech_json}",
+            f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}",
         ),
     }
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -278,19 +284,27 @@ def run_committee(
     reports = "\n\n".join(f"## {k.title()} Analyst\n{v}" for k, v in analysts.items())
 
     notify("pm", "start")
-    pm_initial = generate_response(PM_PROMPT, f"Ticker: {ticker}\n\n{reports}")
+    pm_initial = generate_response(
+        PM_PROMPT, f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n{reports}"
+    )
     notify("pm", "done", _first_sentences(pm_initial))
+    pm_verdict = _parse_pm_verdict(pm_initial)
+    required_opposite = "SELL" if pm_verdict == "BUY" else "BUY"
 
     notify("devil", "start")
     devil = generate_response(
-        DEVIL_PROMPT, f"Ticker: {ticker}\n\n{reports}\n\n## PM Initial Ruling\n{pm_initial}"
+        DEVIL_PROMPT,
+        f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
+        f"You MUST defend this opposite verdict: {required_opposite}.\n\n"
+        f"{reports}\n\n## PM Initial Ruling\n{pm_initial}",
     )
     notify("devil", "done", _first_sentences(devil))
 
     notify("final", "start")
     final = generate_response(
         FINAL_PROMPT,
-        f"Ticker: {ticker}\n\n{reports}\n\n## PM Initial Ruling\n{pm_initial}\n\n"
+        f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
+        f"{reports}\n\n## PM Initial Ruling\n{pm_initial}\n\n"
         f"## Devil's Advocate\n{devil}",
     )
     notify("final", "done", _first_sentences(final))

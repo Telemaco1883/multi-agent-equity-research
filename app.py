@@ -21,7 +21,7 @@ if missing:
     st.error("Backend is not configured. Please contact the administrator.")
     st.stop()
 
-COLORS = {"BUY": "green", "HOLD": "orange", "SELL": "red"}
+COLORS = {"BUY": "green", "NEUTRAL": "orange", "SELL": "red"}
 
 def _render_ticker_data(
     ticker_symbol: str,
@@ -46,7 +46,7 @@ def _render_ticker_data(
         f"{fundamentals.get('industry') or 'N/A'}"
     )
     with st.expander("Raw downloaded fundamentals data", expanded=True):
-        st.json(fundamentals.get("raw_fmp") or fundamentals)
+        st.json(fundamentals)
 
     with st.expander("Recent headlines"):
         if news:

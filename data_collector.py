@@ -276,9 +276,8 @@ def get_stock_fundamentals(ticker: str) -> dict:
         return {"ticker": ticker, "error": "Ticker is required."}
 
     try:
-        profile = _first_record(
-            _fmp_get("/profile", {"symbol": ticker}, base_url=FMP_STABLE_BASE_URL)
-        )
+        profile_payload = _fmp_get("/profile", {"symbol": ticker}, base_url=FMP_STABLE_BASE_URL)
+        profile = _first_record(profile_payload)
     except Exception as exc:
         return {"ticker": ticker, "error": f"Failed to fetch market data: {exc}"}
 
@@ -387,7 +386,7 @@ def get_stock_fundamentals(ticker: str) -> dict:
         "sector": profile.get("sector"),
         "industry": profile.get("industry"),
         "raw_fmp": {
-            "profile": profile,
+            "profile": profile_payload,
             "income_statement": income_payload,
             "balance_sheet_statement": balance_payload,
             "cash_flow_statement": cashflow_payload,
@@ -398,7 +397,7 @@ def get_stock_fundamentals(ticker: str) -> dict:
         "market_cap": _pick_number(profile.get("marketCap")),
         "valuation": {
             "trailing_pe": _pick_number(
-                ratios.get("priceEarningsRatioTTM"),
+                ratios.get("priceToEarningsRatioTTM"),
                 ratios.get("priceEarningsRatio"),
                 profile.get("pe"),
             ),
