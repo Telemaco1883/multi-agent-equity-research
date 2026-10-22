@@ -101,6 +101,7 @@ PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "
     "into an initial recommendation using ONLY provided content. Think deeply, but output only final result.\n"
     "HOLD/NEUTRAL are invalid for this stage.\n"
+    "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL\n"
     "CONVICTION: High|Medium|Low\n"
@@ -108,10 +109,13 @@ PM_PROMPT = (
     "- <bullet 1>\n"
     "- <bullet 2>\n"
     "- <bullet 3>\n"
+    "- <bullet 4>\n"
+    "- <bullet 5>\n"
 )
 DEVIL_PROMPT = (
     "You are the Devil's Advocate. Defend the forced opposite verdict with the strongest possible case "
     "using ONLY provided content. Think deeply, but output only final result.\n"
+    "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL\n"
     "COUNTER-THESIS:\n"
@@ -125,6 +129,7 @@ DEVIL_PROMPT = (
 FINAL_PROMPT = (
     "You are the Portfolio Manager delivering the final Investment Committee verdict after reviewing "
     "the Devil's Advocate challenge. Use only provided content and output a structured final decision.\n"
+    "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL|NEUTRAL\n"
     "CONVICTION: High|Medium|Low\n"
@@ -158,23 +163,6 @@ def _parse_pm_verdict(text: str) -> str:
     verdict = re.search(r"VERDICT\W*(BUY|SELL)", text, re.IGNORECASE)
     return verdict.group(1).upper() if verdict else "BUY"
 
-
-def _enforce_pm_binary_output(pm_text: str) -> tuple[str, str]:
-    verdict = _parse_pm_verdict(pm_text)
-    normalized = pm_text.strip()
-    if re.search(r"VERDICT\W*(BUY|SELL|HOLD|NEUTRAL)", normalized, re.IGNORECASE):
-        normalized = re.sub(
-            r"VERDICT\W*(BUY|SELL|HOLD|NEUTRAL)",
-            f"VERDICT: {verdict}",
-            normalized,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    else:
-        normalized = f"VERDICT: {verdict}\n{normalized}"
-    return verdict, normalized
-
-
 def extract_section(text: str, heading: str) -> str:
     """Return the body of a named section (up to the next heading), or ''."""
     pattern = rf"(?:^|\n)[#*\s]*{re.escape(heading)}[^\n]*\n(.*?)(?=\n[#*\s]*(?:Executive Summary|Horizon|Sizing|Key Risks)|\Z)"
@@ -207,7 +195,7 @@ def summarize_street_consensus(commentary: list[dict[str, Any]]) -> str:
         for item in commentary[:60]
     )
     try:
-        summary = generate_response(MACRO_CONSENSUS_PROMPT, payload, max_tokens=450)
+        summary = generate_response(MACRO_CONSENSUS_PROMPT, payload, max_tokens=800)
         if summary and summary.strip():
             return summary.strip()
     except Exception:
@@ -271,18 +259,24 @@ def run_committee(
         "fundamental": (
             FUNDAMENTAL_PROMPT,
             f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}",
+            600,
         ),
         "sentiment": (
             SENTIMENT_PROMPT,
             f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\nRecent news:\n{news_text}",
+            600,
         ),
         "technical": (
             TECHNICAL_PROMPT,
             f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}",
+            600,
         ),
     }
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = {k: pool.submit(generate_response, s, u) for k, (s, u) in jobs.items()}
+        futures = {
+            k: pool.submit(generate_response, s, u, max_tokens=max_tokens)
+            for k, (s, u, max_tokens) in jobs.items()
+        }
         analysts = {k: f.result() for k, f in futures.items()}
     analysts_preview = "\n".join(
         [
@@ -297,9 +291,11 @@ def run_committee(
 
     notify("pm", "start")
     pm_initial = generate_response(
-        PM_PROMPT, f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n{reports}"
+        PM_PROMPT,
+        f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n{reports}",
+        max_tokens=500,
     )
-    pm_verdict, pm_initial = _enforce_pm_binary_output(pm_initial)
+    pm_verdict = _parse_pm_verdict(pm_initial)
     notify("pm", "done", _first_sentences(pm_initial))
     required_opposite = "SELL" if pm_verdict == "BUY" else "BUY"
 
@@ -309,6 +305,7 @@ def run_committee(
         f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
         f"You MUST defend this opposite verdict: {required_opposite}.\n\n"
         f"{reports}\n\n## PM Initial Ruling\n{pm_initial}",
+        max_tokens=600,
     )
     notify("devil", "done", _first_sentences(devil))
 
@@ -318,6 +315,7 @@ def run_committee(
         f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
         f"{reports}\n\n## PM Initial Ruling\n{pm_initial}\n\n"
         f"## Devil's Advocate\n{devil}",
+        max_tokens=900,
     )
     notify("final", "done", _first_sentences(final))
 
