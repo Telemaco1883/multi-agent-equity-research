@@ -21,9 +21,17 @@ Rules:
 2. Every numeric claim must be tied to explicit fields from the input.
 3. If a field is absent, say "Not available in provided data."
 4. Keep the output under 220 words.
+5. Be impartial: present both pros and cons before your final opinion.
+6. Stay strictly in fundamentals (valuation, growth, profitability, balance sheet, cash flow).
 
 Output exactly this structure:
 ## Fundamental Analyst
+**Pros (2 bullets):**
+- ...
+- ...
+**Cons (2 bullets):**
+- ...
+- ...
 **Stance:** Bullish | Neutral | Bearish
 **What matters most (3 bullets):**
 - ...
@@ -43,9 +51,17 @@ Rules:
 1. Do not infer facts not present in the supplied news content.
 2. Separate tone from hard catalysts/risks.
 3. Keep output under 200 words.
+4. Be impartial: present both positive and negative sentiment drivers before your final opinion.
+5. Stay strictly in sentiment/news flow; do not do fundamentals or technicals.
 
 Output exactly this structure:
 ## Sentiment Analyst
+**Pros (2 bullets):**
+- ...
+- ...
+**Cons (2 bullets):**
+- ...
+- ...
 **Stance:** Risk-On | Neutral | Risk-Off
 **Dominant narratives (3 bullets):**
 - ...
@@ -70,15 +86,21 @@ Rules:
 4. Do not output any confidence/rating field.
 5. Do not fabricate support/resistance levels.
 6. Keep output under 180 words.
+7. Be impartial: present both bullish and bearish technical evidence before your final opinion.
+8. Stay strictly in technical analysis.
 
 Output exactly this structure:
 ## Technical Analyst
+**Pros (2 bullets):**
+- ...
+- ...
+**Cons (2 bullets):**
+- ...
+- ...
 **Stance:** Bullish | Neutral | Bearish
 **Trend/Momentum read (3 bullets):**
 - ...
 - ...
-- ...
-**Data quality note (1 bullet):**
 - ...
 """
 MACRO_CONSENSUS_PROMPT = """
@@ -103,8 +125,22 @@ PM_PROMPT = (
     "into an initial recommendation using ONLY provided content. Think deeply, but output only final result.\n"
     "HOLD/NEUTRAL are invalid for this stage.\n"
     "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
+    "Be explicit, logical, and detailed. Every bullet must contain a clear claim -> evidence -> implication chain.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL\n"
+    "CORE LOGIC:\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
+    "- <bullet 3>\n"
+    "- <bullet 4>\n"
+    "SUPPORTING EVIDENCE:\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
+    "- <bullet 3>\n"
+    "- <bullet 4>\n"
+    "RISKS TO THESIS:\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
     "THESIS:\n"
     "- <bullet 1>\n"
     "- <bullet 2>\n"
@@ -116,15 +152,23 @@ DEVIL_PROMPT = (
     "You are the Devil's Advocate. Defend the forced opposite verdict with the strongest possible case "
     "using ONLY provided content. Think deeply, but output only final result.\n"
     "Numeric style rule: when citing numbers, round to max 2 decimals; for large currency values use $B/$M units.\n"
+    "Be explicit, logical, and detailed. Every bullet must contain a clear claim -> evidence -> implication chain.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL\n"
     "COUNTER-THESIS:\n"
     "- <bullet 1>\n"
     "- <bullet 2>\n"
     "- <bullet 3>\n"
+    "- <bullet 4>\n"
+    "COUNTER-EVIDENCE:\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
+    "- <bullet 3>\n"
+    "- <bullet 4>\n"
     "CRITICAL ASSUMPTION FAILURES:\n"
     "- <bullet 1>\n"
     "- <bullet 2>\n"
+    "- <bullet 3>\n"
 )
 FINAL_PROMPT = (
     "You are the Portfolio Manager delivering the final Investment Committee verdict after reviewing "
@@ -174,6 +218,28 @@ def _first_sentences(text: str, max_sentences: int = 2) -> str:
         return cleaned[:280]
     preview = " ".join(parts[:max_sentences]).strip()
     return preview[:360]
+
+
+def _normalize_structured_sections(text: str) -> str:
+    cleaned = (text or "").replace("\r\n", "\n").strip()
+    cleaned = re.sub(r"\b(VERDICT:\s*(?:BUY|SELL|NEUTRAL|HOLD))\s+(?=[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", r"\1\n\n", cleaned)
+    headings = [
+        "CORE LOGIC:",
+        "SUPPORTING EVIDENCE:",
+        "RISKS TO THESIS:",
+        "THESIS:",
+        "COUNTER-THESIS:",
+        "COUNTER-EVIDENCE:",
+        "CRITICAL ASSUMPTION FAILURES:",
+        "Executive Summary",
+        "Horizon",
+        "Sizing Guidance",
+        "Key Risks",
+    ]
+    for heading in headings:
+        cleaned = re.sub(rf"\s*{re.escape(heading)}\s*", f"\n\n{heading}\n", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
 
 
 def _pack_full_items_with_budget(items: list[str], max_chars: int) -> str:
@@ -329,8 +395,9 @@ def run_committee(
     pm_initial = generate_response(
         PM_PROMPT,
         f"Ticker: {ticker}\n\nAnalyst summaries:\n{reports}",
-        max_tokens=500,
+        max_tokens=900,
     )
+    pm_initial = _normalize_structured_sections(pm_initial)
     pm_verdict = _parse_pm_verdict(pm_initial)
     notify("pm", "done", _first_sentences(pm_initial))
     required_opposite = "SELL" if pm_verdict == "BUY" else "BUY"
@@ -341,8 +408,9 @@ def run_committee(
         f"Ticker: {ticker}\n\nAnalyst summaries:\n{reports}\n\n"
         f"You MUST defend this opposite verdict: {required_opposite}.\n\n"
         f"## PM Initial Ruling\n{pm_initial}",
-        max_tokens=600,
+        max_tokens=1000,
     )
+    devil = _normalize_structured_sections(devil)
     notify("devil", "done", _first_sentences(devil))
 
     notify("final", "start")
@@ -352,6 +420,7 @@ def run_committee(
         f"## PM Initial Ruling\n{pm_initial}\n\n## Devil's Advocate\n{devil}",
         max_tokens=900,
     )
+    final = _normalize_structured_sections(final)
     notify("final", "done", _first_sentences(final))
 
     verdict = parse_verdict(final)

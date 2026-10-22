@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -70,6 +71,16 @@ def _parse_range_low_high(range_text: Any) -> tuple[float | None, float | None]:
     low = _num(match.group(1))
     high = _num(match.group(2))
     return low, high
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 def _fmp_get(
@@ -392,7 +403,7 @@ def _build_technical_payload(historical_payload: Any) -> dict[str, Any]:
         }
     ).dropna(subset=["sma_200"])
 
-    return {
+    return _json_safe({
         "technical_summary": {
             "rows_used": int(len(df)),
             "start_date": str(df["date"].iloc[0].date()),
@@ -442,7 +453,7 @@ def _build_technical_payload(historical_payload: Any) -> dict[str, Any]:
             "volume_vs_20d_ma_pct": round(float(volume_vs_20d), 2) if volume_vs_20d is not None else None,
         },
         "technical_chart": chart_df.tail(300).to_dict(orient="records"),
-    }
+    })
 
 
 def get_stock_fundamentals_raw(ticker: str) -> dict:
@@ -492,7 +503,7 @@ def get_stock_fundamentals_raw(ticker: str) -> dict:
     technical = _build_technical_payload(payload["historical_price_eod"])
     payload["technical_summary"] = technical["technical_summary"]
     payload["technical_chart"] = technical["technical_chart"]
-    return payload
+    return _json_safe(payload)
 
 
 def get_stock_fundamentals(ticker: str) -> dict:

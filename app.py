@@ -37,19 +37,29 @@ def _render_technical_charts(fundamentals: dict) -> None:
     chart_df["date"] = pd.to_datetime(chart_df["date"], errors="coerce")
     chart_df = chart_df.dropna(subset=["date"]).set_index("date")
 
+    c1, c2, c3 = st.columns(3)
     price_cols = [col for col in ["close", "sma_20", "sma_50", "sma_100", "sma_200", "ema_21", "ema_50"] if col in chart_df.columns]
-    if price_cols:
+    with c1:
         st.markdown("**Price + MA/EMA**")
-        st.line_chart(chart_df[price_cols], use_container_width=True)
+        if price_cols:
+            st.line_chart(chart_df[price_cols], use_container_width=True)
+        else:
+            st.info("Price/MA data unavailable.")
 
-    if "rsi_14" in chart_df.columns:
+    with c2:
         st.markdown("**RSI (14)**")
-        st.line_chart(chart_df[["rsi_14"]], use_container_width=True)
+        if "rsi_14" in chart_df.columns:
+            st.line_chart(chart_df[["rsi_14"]], use_container_width=True)
+        else:
+            st.info("RSI data unavailable.")
 
     macd_cols = [col for col in ["macd", "macd_signal", "macd_hist"] if col in chart_df.columns]
-    if macd_cols:
+    with c3:
         st.markdown("**MACD**")
-        st.line_chart(chart_df[macd_cols], use_container_width=True)
+        if macd_cols:
+            st.line_chart(chart_df[macd_cols], use_container_width=True)
+        else:
+            st.info("MACD data unavailable.")
 
 
 def _render_ticker_data(
@@ -99,20 +109,16 @@ def _render_ticker_data(
     with st.expander("4) Sentiment analyst", expanded=False):
         st.write(result["analysts"]["sentiment"])
     with st.expander("5) Technical analyst", expanded=False):
-        _render_technical_charts(fundamentals)
-        tech_summary = fundamentals.get("technical_summary")
-        if tech_summary:
-            st.markdown("**Technical summary used by analyst**")
-            st.json(tech_summary)
         st.write(result["analysts"]["technical"])
+        _render_technical_charts(fundamentals)
     with st.expander("6) PM initial ruling", expanded=False):
-        st.write(result["pm_initial"])
+        st.markdown(result["pm_initial"])
     with st.expander("7) Devil's advocate", expanded=False):
-        st.write(result["devil"])
+        st.markdown(result["devil"])
     with st.expander("8) Investment committee decision", expanded=True):
         color = COLORS.get(result["verdict"], "gray")
         st.markdown(f"**Verdict:** :{color}[{result['verdict']}]")
-        st.write(result["final"])
+        st.markdown(result["final"])
 
 
 ticker = st.text_input("Ticker", placeholder="TSLA", key="ticker_input").strip().upper()
