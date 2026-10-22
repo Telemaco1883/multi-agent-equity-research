@@ -17,12 +17,26 @@ import config
 
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 NEWS_URL = "https://news.google.com/rss/search?q={ticker}+stock"
-STREET_COMMENTARY_QUERY = (
-    "(UBS OR BlackRock OR Goldman Sachs OR JPMorgan OR Morgan Stanley OR Citi OR "
-    "\"Bank of America\") (macro OR inflation OR rates OR fed OR growth OR recession OR "
-    "equities OR stocks OR bonds OR credit OR spreads OR fx OR dollar OR commodities OR oil "
-    "OR gold OR volatility OR risk sentiment) -earnings -quarterly -q1 -q2 -q3 -q4 when:14d"
-)
+STREET_COMMENTARY_QUERIES = [
+    (
+        "(\"macro outlook\" OR \"asset allocation\" OR \"strategy note\" OR "
+        "\"chief investment officer\" OR \"market outlook\" OR \"global strategist\") AND "
+        "(\"equities\" OR \"fixed income\" OR \"credit\" OR \"bonds\") AND "
+        "(\"overweight\" OR \"underweight\" OR \"rate cut\" OR \"yield curve\") "
+        "-earnings -quarterly when:7d"
+    ),
+    (
+        "site:reuters.com OR site:marketwatch.com OR site:cnbc.com OR site:finance.yahoo.com "
+        "AND (\"strategists say\" OR \"Wall Street consensus\" OR \"base case\" OR "
+        "\"soft landing\" OR \"terminal rate\" OR \"rate cut forecast\" OR \"recession risk\") "
+        "-earnings when:7d"
+    ),
+    (
+        "(\"consensus forecast\" OR \"survey of forecasters\" OR \"median estimate\" OR "
+        "\"economists survey\" OR \"fund manager survey\") AND "
+        "(\"Fed\" OR \"inflation\" OR \"CPI\" OR \"Treasury yields\" OR \"GDP growth\") when:14d"
+    ),
+]
 STREET_COMMENTARY_URL = "https://news.google.com/rss/search?q={query}"
 ARTICLE_TIMEOUT_SECONDS = 8
 ARTICLE_MAX_CHARS = 3500
@@ -389,11 +403,14 @@ def get_street_commentary(limit: int = 20) -> list[dict]:
     if max_items == 0:
         return []
 
-    try:
-        feed = feedparser.parse(STREET_COMMENTARY_URL.format(query=quote_plus(STREET_COMMENTARY_QUERY)))
-    except Exception:
-        return []
-    entries = (feed.entries or [])[: max(max_items * 2, max_items)]
+    entries: list[Any] = []
+    per_query_limit = max(max_items, 20)
+    for query in STREET_COMMENTARY_QUERIES:
+        try:
+            feed = feedparser.parse(STREET_COMMENTARY_URL.format(query=quote_plus(query)))
+        except Exception:
+            continue
+        entries.extend((feed.entries or [])[:per_query_limit])
     if not entries:
         return []
 
