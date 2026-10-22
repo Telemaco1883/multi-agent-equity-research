@@ -10,19 +10,76 @@ from llm_client import generate_response
 
 ProgressCallback = Callable[[str, str, str | None], None]  # (stage_key, "start" | "done", preview)
 
-FUNDAMENTAL_PROMPT = (
-    "You are a Fundamental Analyst on an investment committee. Evaluate valuation, balance sheet "
-    "strength, margins and earnings trajectory using ONLY the data provided. Be concise and "
-    "quantitative; note missing data explicitly."
-)
-SENTIMENT_PROMPT = (
-    "You are a Sentiment Analyst on an investment committee. From the recent news, identify key "
-    "narrative themes, risks, catalysts and overall media sentiment. Be concise and cite headlines."
-)
-TECHNICAL_PROMPT = (
-    "You are a Technical Analyst on an investment committee. Evaluate trend, momentum indicators "
-    "(50/200-day MAs, RSI) and key support/resistance levels using ONLY the data provided."
-)
+FUNDAMENTAL_PROMPT = """
+You are the Fundamental Analyst on an investment committee.
+Use ONLY the provided raw fundamentals JSON and recent news context.
+Reason deeply, but output only the final concise answer.
+
+Rules:
+1. No invented numbers, no external data.
+2. Every numeric claim must be tied to explicit fields from the input.
+3. If a field is absent, say "Not available in provided data."
+4. Keep the output under 220 words.
+
+Output exactly this structure:
+## Fundamental Analyst
+**Stance:** Bullish | Neutral | Bearish
+**Confidence:** High | Medium | Low
+**What matters most (3 bullets):**
+- ...
+- ...
+- ...
+**Evidence from provided data (4 bullets max):**
+- [field/value] -> implication
+**Primary failure mode (1 bullet):**
+- ...
+"""
+SENTIMENT_PROMPT = """
+You are the Sentiment Analyst on an investment committee.
+Use ONLY the provided recent news and article content.
+Reason deeply, but output only the final concise answer.
+
+Rules:
+1. Do not infer facts not present in the supplied news content.
+2. Separate tone from hard catalysts/risks.
+3. Keep output under 200 words.
+
+Output exactly this structure:
+## Sentiment Analyst
+**Stance:** Risk-On | Neutral | Risk-Off
+**Confidence:** High | Medium | Low
+**Dominant narratives (3 bullets):**
+- ...
+- ...
+- ...
+**Near-term catalysts (2 bullets):**
+- ...
+- ...
+**Sentiment risks (2 bullets):**
+- ...
+- ...
+"""
+TECHNICAL_PROMPT = """
+You are the Technical Analyst on an investment committee.
+Use ONLY the provided raw JSON fields.
+Reason deeply, but output only the final concise answer.
+
+Rules:
+1. If technical fields are missing, state that explicitly and reduce confidence.
+2. Do not fabricate support/resistance levels.
+3. Keep output under 180 words.
+
+Output exactly this structure:
+## Technical Analyst
+**Stance:** Bullish | Neutral | Bearish
+**Confidence:** High | Medium | Low
+**Trend/Momentum read (3 bullets):**
+- ...
+- ...
+- ...
+**Data quality note (1 bullet):**
+- ...
+"""
 MACRO_CONSENSUS_PROMPT = """
 You are a Senior Global Macro Strategist at an institutional asset management firm.
 Synthesize the prevailing Street consensus across major asset classes based SOLELY on the provided market commentary and article content.
@@ -42,107 +99,45 @@ Synthesize the prevailing Street consensus across major asset classes based SOLE
 """
 PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "
-    "into an initial recommendation. Start with exactly two lines:\n"
-    "VERDICT: BUY|SELL\nCONVICTION: High|Medium|Low\n"
-    "Then give the key rationale."
+    "into an initial recommendation using ONLY provided content. Think deeply, but output only final result.\n"
+    "Output EXACTLY this format:\n"
+    "VERDICT: BUY|SELL\n"
+    "CONVICTION: High|Medium|Low\n"
+    "THESIS:\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
+    "- <bullet 3>\n"
 )
 DEVIL_PROMPT = (
-    "You are the Devil's Advocate. Take the OPPOSITE position to the PM's recommendation. Highlight "
-    "blind spots, downside tail risks and challenge the PM's assumptions with specifics."
+    "You are the Devil's Advocate. Defend the forced opposite verdict with the strongest possible case "
+    "using ONLY provided content. Think deeply, but output only final result.\n"
+    "Output EXACTLY this format:\n"
+    "VERDICT: BUY|SELL\n"
+    "COUNTER-THESIS:\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
+    "- <bullet 3>\n"
+    "CRITICAL ASSUMPTION FAILURES:\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
 )
 FINAL_PROMPT = (
     "You are the Portfolio Manager delivering the final Investment Committee verdict after reviewing "
-    "the Devil's Advocate challenge. Start with exactly two lines:\n"
-    "VERDICT: BUY|SELL|NEUTRAL\nCONVICTION: High|Medium|Low\n"
-    "Then provide these sections: Executive Summary, Horizon, Sizing Guidance, Key Risks to Monitor "
-    "(bulleted)."
+    "the Devil's Advocate challenge. Use only provided content and output a structured final decision.\n"
+    "Output EXACTLY this format:\n"
+    "VERDICT: BUY|SELL|NEUTRAL\n"
+    "CONVICTION: High|Medium|Low\n"
+    "Executive Summary\n"
+    "- <bullet 1>\n"
+    "- <bullet 2>\n"
+    "Horizon\n"
+    "- <short/medium/long guidance>\n"
+    "Sizing Guidance\n"
+    "- <position sizing guidance>\n"
+    "Key Risks\n"
+    "- <risk 1>\n"
+    "- <risk 2>\n"
 )
-
-
-def _is_num(value: Any) -> bool:
-    return isinstance(value, (int, float))
-
-
-def _fmt(value: Any) -> str:
-    if value is None:
-        return "N/A"
-    if isinstance(value, (int, float)):
-        return f"{value:,.3f}" if abs(value) < 100 else f"{value:,.2f}"
-    return str(value)
-
-
-def _fundamentals_completeness(fundamentals: dict[str, Any]) -> float:
-    keys = [
-        ("valuation", "trailing_pe"),
-        ("valuation", "forward_pe"),
-        ("valuation", "ev_to_ebitda"),
-        ("valuation", "price_to_sales"),
-        ("valuation", "peg_ratio"),
-        ("margins", "gross"),
-        ("margins", "operating"),
-        ("margins", "net"),
-        ("growth", "revenue_growth"),
-        ("growth", "earnings_growth"),
-        ("balance_sheet", "total_cash"),
-        ("balance_sheet", "total_debt"),
-        ("balance_sheet", "debt_to_equity"),
-        ("balance_sheet", "current_ratio"),
-        ("balance_sheet", "free_cash_flow"),
-    ]
-    present = 0
-    for section, key in keys:
-        if fundamentals.get(section, {}).get(key) is not None:
-            present += 1
-    return present / len(keys)
-
-
-def _deterministic_fundamental_memo(ticker: str, fundamentals: dict[str, Any]) -> str:
-    v = fundamentals.get("valuation", {})
-    m = fundamentals.get("margins", {})
-    g = fundamentals.get("growth", {})
-    b = fundamentals.get("balance_sheet", {})
-    lines = [
-        f"Fundamental view for {ticker} (data-backed summary):",
-        "",
-        "Valuation:",
-        f"- Trailing P/E: {_fmt(v.get('trailing_pe'))}",
-        f"- Forward P/E: {_fmt(v.get('forward_pe'))}",
-        f"- EV/EBITDA: {_fmt(v.get('ev_to_ebitda'))}",
-        f"- Price/Sales: {_fmt(v.get('price_to_sales'))}",
-        f"- PEG Ratio: {_fmt(v.get('peg_ratio'))}",
-        "",
-        "Profitability:",
-        f"- Gross margin: {_fmt(m.get('gross'))}",
-        f"- Operating margin: {_fmt(m.get('operating'))}",
-        f"- Net margin: {_fmt(m.get('net'))}",
-        "",
-        "Growth:",
-        f"- Revenue growth: {_fmt(g.get('revenue_growth'))}",
-        f"- Earnings growth: {_fmt(g.get('earnings_growth'))}",
-        "",
-        "Balance sheet / cash:",
-        f"- Total cash: {_fmt(b.get('total_cash'))}",
-        f"- Total debt: {_fmt(b.get('total_debt'))}",
-        f"- Debt/Equity: {_fmt(b.get('debt_to_equity'))}",
-        f"- Current ratio: {_fmt(b.get('current_ratio'))}",
-        f"- Free cash flow: {_fmt(b.get('free_cash_flow'))}",
-    ]
-    return "\n".join(lines)
-
-
-def _fundamental_response_is_incoherent(response: str, fundamentals: dict[str, Any]) -> bool:
-    if not response:
-        return True
-    lower = response.lower()
-    available = _fundamentals_completeness(fundamentals)
-    if available < 0.45:
-        return False
-    missing_hits = lower.count("missing data")
-    if missing_hits >= 3:
-        return True
-    if "without sufficient data" in lower and available >= 0.6:
-        return True
-    return False
 
 
 def parse_verdict(text: str) -> tuple[str, str]:

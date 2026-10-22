@@ -29,8 +29,9 @@ def _render_ticker_data(
     news: list[dict],
     macro_summary: str,
     macro_commentary: list[dict],
+    result: dict | None = None,
 ) -> None:
-    with st.expander("Street macro consensus (Step 1)", expanded=True):
+    with st.expander("1) Street macro consensus", expanded=True):
         st.write(macro_summary or "No street macro commentary summary available.")
         if macro_commentary:
             with st.expander("Street macro source headlines", expanded=False):
@@ -40,10 +41,10 @@ def _render_ticker_data(
                         f" ({item.get('published', '')})"
                     )
 
-    with st.expander("Raw downloaded fundamentals data", expanded=True):
+    with st.expander("2) Raw downloaded data", expanded=True):
+        st.markdown("**Fundamentals JSON**")
         st.json(fundamentals)
-
-    with st.expander("Recent headlines"):
+        st.markdown("**Recent headlines**")
         if news:
             for item in news:
                 st.markdown(
@@ -55,6 +56,25 @@ def _render_ticker_data(
                     st.caption(excerpt[:320] + ("..." if len(excerpt) > 320 else ""))
         else:
             st.write("No recent headlines found.")
+
+    if not result:
+        return
+
+    with st.expander("3) Fundamental analyst", expanded=True):
+        st.write(result["analysts"]["fundamental"])
+    with st.expander("4) Sentiment analyst", expanded=False):
+        st.write(result["analysts"]["sentiment"])
+    with st.expander("5) Technical analyst", expanded=False):
+        st.write(result["analysts"]["technical"])
+    with st.expander("6) PM initial ruling", expanded=False):
+        st.write(result["pm_initial"])
+    with st.expander("7) Devil's advocate", expanded=False):
+        st.write(result["devil"])
+    with st.expander("8) Investment committee decision", expanded=True):
+        color = COLORS.get(result["verdict"], "gray")
+        st.markdown(f"**Verdict:** :{color}[{result['verdict']}]")
+        st.markdown(f"**Conviction:** {result['conviction']}")
+        st.write(result["final"])
 
 
 ticker = st.text_input("Ticker", placeholder="TSLA", key="ticker_input").strip().upper()
@@ -151,6 +171,7 @@ if run:
                     preview_box.success("Reasoning complete.")
                     status.update(label="Committee complete", state="complete", expanded=False)
                 st.session_state["result"] = (ticker, result)
+                _render_ticker_data(ticker, fundamentals, news, macro_summary, macro_commentary, result)
             except Exception as exc:
                 st.error(f"The committee could not complete: {exc}")
 
@@ -171,33 +192,12 @@ if data_loaded_for_ticker and not rendered_in_run:
         st.session_state["news"],
         st.session_state.get("macro_summary", ""),
         st.session_state.get("macro_commentary", []),
+        st.session_state.get("result", ("", None))[1]
+        if st.session_state.get("result", ("", None))[0] == loaded_ticker
+        else None,
     )
-
 if "result" in st.session_state:
     t, result = st.session_state["result"]
-    color = COLORS.get(result["verdict"], "gray")
-    st.markdown(f"## {t}: :{color}[{result['verdict']}]")
-    st.markdown(f"**Conviction:** {result['conviction']}")
-    st.subheader("Executive Summary")
-    st.write(result["summary"])
-    if result["risks"]:
-        st.subheader("Key Risks")
-        st.write(result["risks"])
-
-    with st.expander("Fundamental Analyst memo"):
-        st.write(result["analysts"]["fundamental"])
-    with st.expander("Sentiment Analyst memo"):
-        st.write(result["analysts"]["sentiment"])
-    with st.expander("Technical Analyst memo"):
-        st.write(result["analysts"]["technical"])
-    with st.expander("Full debate transcript"):
-        st.markdown("### PM Initial Ruling")
-        st.write(result["pm_initial"])
-        st.markdown("### Devil's Advocate")
-        st.write(result["devil"])
-        st.markdown("### Final Verdict")
-        st.write(result["final"])
-
     st.download_button(
         "Download report",
         data=build_report(t, result),
