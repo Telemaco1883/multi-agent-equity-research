@@ -6,16 +6,18 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode, urlparse
 from urllib.request import Request, urlopen
 
+import feedparser
 import pandas as pd
 from bs4 import BeautifulSoup
 
 import config
 
-FMP_BASE_URL = "https://financialmodelingprep.com/api/v3"
+FMP_BASE_URL = "https://financialmodelingprep.com/stable"
+NEWS_URL = "https://news.google.com/rss/search?q={ticker}+stock"
 ARTICLE_TIMEOUT_SECONDS = 8
 ARTICLE_MAX_CHARS = 3500
 
@@ -74,6 +76,7 @@ def _fmp_get(path: str, params: dict[str, Any] | None = None) -> Any:
     request = Request(
         url,
         headers={
+            "apikey": config.FMP_API_KEY,
             "User-Agent": (
                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
@@ -85,6 +88,12 @@ def _fmp_get(path: str, params: dict[str, Any] | None = None) -> Any:
             charset = response.headers.get_content_charset() or "utf-8"
             payload = response.read().decode(charset, errors="ignore")
             return json.loads(payload)
+    except HTTPError as exc:
+        if exc.code in (401, 403):
+            raise RuntimeError(
+                "FMP request was rejected (401/403). Check FMP_API_KEY, plan access, and key validity."
+            ) from exc
+        raise RuntimeError(f"FMP request failed for {path}: {exc}") from exc
     except (URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"FMP request failed for {path}: {exc}") from exc
 
@@ -196,6 +205,45 @@ def _extract_article_text(url: str, snippet: str) -> str:
     return snippet
 
 
+def _pick_source_url(entry: Any, summary_html: str) -> str:
+    candidates: list[str] = []
+    link = (entry.get("link", "") or "").strip()
+    if link:
+        candidates.append(link)
+    for link_obj in entry.get("links", []) or []:
+        href = (link_obj.get("href", "") or "").strip()
+        if href:
+            candidates.append(href)
+
+    soup = BeautifulSoup(summary_html or "", "html.parser")
+    for a in soup.find_all("a", href=True):
+        href = (a["href"] or "").strip()
+        if href:
+            candidates.append(href)
+
+    for candidate in candidates:
+        parsed = urlparse(candidate)
+        if parsed.scheme not in {"http", "https"}:
+            continue
+        if "news.google.com" in parsed.netloc.lower():
+            continue
+        return candidate
+    return link
+
+
+def _enrich_google_entry(entry: Any) -> dict[str, str]:
+    summary_html = entry.get("summary", "") or ""
+    snippet = BeautifulSoup(summary_html, "html.parser").get_text(" ", strip=True)
+    source_link = _pick_source_url(entry, summary_html)
+    return {
+        "title": (entry.get("title", "") or "").strip(),
+        "snippet": snippet,
+        "article_text": _extract_article_text(source_link, snippet),
+        "published": (entry.get("published", "") or "").strip(),
+        "link": source_link or (entry.get("link", "") or "").strip(),
+    }
+
+
 def get_stock_fundamentals(ticker: str) -> dict:
     """Pull valuation, margins, growth, balance sheet and technical data via FMP API."""
     ticker = ticker.strip().upper()
@@ -203,18 +251,24 @@ def get_stock_fundamentals(ticker: str) -> dict:
         return {"ticker": ticker, "error": "Ticker is required."}
 
     try:
-        quote = _first_record(_fmp_get(f"/quote/{quote_plus(ticker)}"))
-        profile = _first_record(_fmp_get(f"/profile/{quote_plus(ticker)}"))
-        metrics_ttm = _first_record(_fmp_get(f"/key-metrics-ttm/{quote_plus(ticker)}"))
-        ratios_ttm = _first_record(_fmp_get(f"/ratios-ttm/{quote_plus(ticker)}"))
-        income = _fmp_get(f"/income-statement/{quote_plus(ticker)}", {"limit": 2})
-        balance = _fmp_get(f"/balance-sheet-statement/{quote_plus(ticker)}", {"limit": 1})
-        cashflow = _fmp_get(f"/cash-flow-statement/{quote_plus(ticker)}", {"limit": 1})
-        price_history = _fmp_get(f"/historical-price-full/{quote_plus(ticker)}", {"serietype": "line"})
+        symbol_params = {"symbol": ticker}
+        quote = _first_record(_fmp_get("/quote", symbol_params))
+        profile = _first_record(_fmp_get("/profile", symbol_params))
+        metrics_ttm = _first_record(_fmp_get("/key-metrics-ttm", symbol_params))
+        ratios_ttm = _first_record(_fmp_get("/ratios-ttm", symbol_params))
+        income = _fmp_get("/income-statement", {**symbol_params, "limit": 2})
+        balance = _fmp_get("/balance-sheet-statement", {**symbol_params, "limit": 1})
+        cashflow = _fmp_get("/cash-flow-statement", {**symbol_params, "limit": 1})
+        price_history = _fmp_get("/historical-price-eod/full", symbol_params)
     except Exception as exc:
         return {"ticker": ticker, "error": f"Failed to fetch market data: {exc}"}
 
-    historical = price_history.get("historical", []) if isinstance(price_history, dict) else []
+    if isinstance(price_history, dict):
+        historical = price_history.get("historical", [])
+    elif isinstance(price_history, list):
+        historical = price_history
+    else:
+        historical = []
     close = pd.to_numeric(
         pd.Series([entry.get("close") for entry in historical if isinstance(entry, dict)]),
         errors="coerce",
@@ -304,56 +358,20 @@ def get_stock_fundamentals(ticker: str) -> dict:
 
 
 def get_latest_news(ticker: str, limit: int = 8) -> list[dict]:
-    """Fetch recent company news from FMP and enrich article text when possible."""
+    """Fetch recent company news from Google News RSS and enrich article text when possible."""
     ticker = ticker.strip().upper()
     max_items = max(limit, 0)
     if max_items == 0:
         return []
-    if not config.FMP_API_KEY:
-        return []
 
     try:
-        payload = _fmp_get("/stock_news", {"tickers": ticker, "limit": max_items})
+        feed = feedparser.parse(NEWS_URL.format(ticker=quote_plus(ticker)))
     except Exception:
         return []
-    items = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
-    if not items:
+    entries = (feed.entries or [])[:max_items]
+    if not entries:
         return []
 
-    base_items: list[dict[str, str]] = []
-    for item in items[:max_items]:
-        title = _clean_text(str(item.get("title", "")))
-        link = _clean_text(str(item.get("url", "")))
-        snippet = _clean_text(str(item.get("text", "")))
-        if not title or not link:
-            continue
-        published_raw = _clean_text(str(item.get("publishedDate", "")))
-        published = published_raw
-        if published_raw:
-            try:
-                published = datetime.fromisoformat(published_raw.replace("Z", "+00:00")).astimezone(
-                    timezone.utc
-                ).isoformat()
-            except ValueError:
-                pass
-        base_items.append(
-            {
-                "title": title,
-                "snippet": snippet,
-                "published": published,
-                "link": link,
-            }
-        )
-
-    if not base_items:
-        return []
-
-    def enrich(item: dict[str, str]) -> dict[str, str]:
-        parsed = urlparse(item["link"])
-        if parsed.scheme not in {"http", "https"}:
-            return {**item, "article_text": item["snippet"]}
-        article_text = _extract_article_text(item["link"], item["snippet"])
-        return {**item, "article_text": article_text}
-
-    with ThreadPoolExecutor(max_workers=min(6, len(base_items))) as pool:
-        return list(pool.map(enrich, base_items))
+    with ThreadPoolExecutor(max_workers=min(6, len(entries))) as pool:
+        enriched = list(pool.map(_enrich_google_entry, entries))
+    return [item for item in enriched if item.get("title")]

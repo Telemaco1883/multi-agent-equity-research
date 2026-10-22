@@ -1,6 +1,7 @@
 streamlit>=1.37,<2
 huggingface_hub
 openai
+feedparser
 beautifulsoup4
 python-dotenv
 pandas

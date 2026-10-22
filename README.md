@@ -15,4 +15,4 @@ Workflow in the app:
 News ingestion is resilient: it uses direct finance news feeds first and attempts full-article text extraction, with snippet fallback when an article cannot be parsed.
 
 Required data key:
-- `FMP_API_KEY` (Financial Modeling Prep API key for fundamentals and news)
+- `FMP_API_KEY` (Financial Modeling Prep API key for fundamentals)
