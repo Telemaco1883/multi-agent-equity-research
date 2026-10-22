@@ -100,6 +100,7 @@ Synthesize the prevailing Street consensus across major asset classes based SOLE
 PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "
     "into an initial recommendation using ONLY provided content. Think deeply, but output only final result.\n"
+    "HOLD/NEUTRAL are invalid for this stage.\n"
     "Output EXACTLY this format:\n"
     "VERDICT: BUY|SELL\n"
     "CONVICTION: High|Medium|Low\n"
@@ -156,6 +157,22 @@ def parse_verdict(text: str) -> tuple[str, str]:
 def _parse_pm_verdict(text: str) -> str:
     verdict = re.search(r"VERDICT\W*(BUY|SELL)", text, re.IGNORECASE)
     return verdict.group(1).upper() if verdict else "BUY"
+
+
+def _enforce_pm_binary_output(pm_text: str) -> tuple[str, str]:
+    verdict = _parse_pm_verdict(pm_text)
+    normalized = pm_text.strip()
+    if re.search(r"VERDICT\W*(BUY|SELL|HOLD|NEUTRAL)", normalized, re.IGNORECASE):
+        normalized = re.sub(
+            r"VERDICT\W*(BUY|SELL|HOLD|NEUTRAL)",
+            f"VERDICT: {verdict}",
+            normalized,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    else:
+        normalized = f"VERDICT: {verdict}\n{normalized}"
+    return verdict, normalized
 
 
 def extract_section(text: str, heading: str) -> str:
@@ -282,8 +299,8 @@ def run_committee(
     pm_initial = generate_response(
         PM_PROMPT, f"Ticker: {ticker}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n{reports}"
     )
+    pm_verdict, pm_initial = _enforce_pm_binary_output(pm_initial)
     notify("pm", "done", _first_sentences(pm_initial))
-    pm_verdict = _parse_pm_verdict(pm_initial)
     required_opposite = "SELL" if pm_verdict == "BUY" else "BUY"
 
     notify("devil", "start")

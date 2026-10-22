@@ -121,7 +121,7 @@ if run:
                 st.session_state["news"] = news
                 st.session_state["loaded_ticker"] = ticker
                 st.session_state.pop("result", None)
-                status.update(label="Ticker data loaded", state="complete", expanded=False)
+                status.update(label="Data fetch complete", state="complete", expanded=False)
 
         if "error" in fundamentals:
             with st.expander("Street macro consensus (Step 1)", expanded=True):
@@ -134,9 +134,6 @@ if run:
                                 f" ({item.get('published', '')})"
                             )
         else:
-            _render_ticker_data(ticker, fundamentals, news, macro_summary, macro_commentary)
-            rendered_in_run = True
-
             try:
                 with st.status("Running investment committee...", expanded=True) as status:
                     labels = {
@@ -172,6 +169,7 @@ if run:
                     status.update(label="Committee complete", state="complete", expanded=False)
                 st.session_state["result"] = (ticker, result)
                 _render_ticker_data(ticker, fundamentals, news, macro_summary, macro_commentary, result)
+                rendered_in_run = True
             except Exception as exc:
                 st.error(f"The committee could not complete: {exc}")
 
