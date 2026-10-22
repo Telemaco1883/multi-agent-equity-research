@@ -136,6 +136,8 @@ if run:
             st.write("1/6 Fetching latest street macro commentary...")
             macro_commentary = get_street_commentary(limit=60)
             macro_summary = summarize_street_consensus(macro_commentary)
+            st.session_state["macro_commentary"] = macro_commentary
+            st.session_state["macro_summary"] = macro_summary
             if not macro_commentary:
                 st.write("⚠️ No street macro commentary found; consensus summary may be limited.")
 
@@ -144,59 +146,68 @@ if run:
             if "error" in fundamentals:
                 status.update(label="Data collection failed", state="error")
                 st.error(fundamentals["error"])
-                st.stop()
-            news = get_latest_news(ticker, limit=20)
-            if not news:
-                st.write("⚠️ No recent news found; sentiment analysis may be limited.")
+            else:
+                news = get_latest_news(ticker, limit=20)
+                if not news:
+                    st.write("⚠️ No recent news found; sentiment analysis may be limited.")
 
-            st.session_state["fundamentals"] = fundamentals
-            st.session_state["news"] = news
-            st.session_state["macro_commentary"] = macro_commentary
-            st.session_state["macro_summary"] = macro_summary
-            st.session_state["loaded_ticker"] = ticker
-            st.session_state.pop("result", None)
-            status.update(label="Ticker data loaded", state="complete", expanded=False)
+                st.session_state["fundamentals"] = fundamentals
+                st.session_state["news"] = news
+                st.session_state["loaded_ticker"] = ticker
+                st.session_state.pop("result", None)
+                status.update(label="Ticker data loaded", state="complete", expanded=False)
 
-        st.markdown("### Ticker data loaded")
-        _render_ticker_data(ticker, fundamentals, news, macro_summary, macro_commentary)
-        rendered_in_run = True
+        if "error" in fundamentals:
+            with st.expander("Street macro consensus (Step 1)", expanded=True):
+                st.write(macro_summary or "No street macro commentary summary available.")
+                if macro_commentary:
+                    with st.expander("Street macro source headlines", expanded=False):
+                        for item in macro_commentary:
+                            st.markdown(
+                                f"- [{item.get('title', 'Untitled')}]({item.get('link', '')})"
+                                f" ({item.get('published', '')})"
+                            )
+        else:
+            st.markdown("### Ticker data loaded")
+            _render_ticker_data(ticker, fundamentals, news, macro_summary, macro_commentary)
+            rendered_in_run = True
 
-        try:
-            with st.status("Running investment committee...", expanded=True) as status:
-                labels = {
-                    "analysts": "3/6 Parallel analyst research...",
-                    "pm": "4/6 Initial PM thesis...",
-                    "devil": "5/6 Devil's advocate challenge...",
-                    "final": "6/6 Final committee decision...",
-                }
-                previews = {
-                    "analysts": "Analysts are scoring fundamentals, sentiment, and technicals.",
-                    "pm": "PM is synthesizing the first recommendation.",
-                    "devil": "Devil's Advocate is stress-testing the thesis.",
-                    "final": "PM is finalizing the committee verdict and risk framing.",
-                }
-                preview_box = st.empty()
+            try:
+                with st.status("Running investment committee...", expanded=True) as status:
+                    labels = {
+                        "analysts": "3/6 Parallel analyst research...",
+                        "pm": "4/6 Initial PM thesis...",
+                        "devil": "5/6 Devil's advocate challenge...",
+                        "final": "6/6 Final committee decision...",
+                    }
+                    previews = {
+                        "analysts": "Analysts are scoring fundamentals, sentiment, and technicals.",
+                        "pm": "PM is synthesizing the first recommendation.",
+                        "devil": "Devil's Advocate is stress-testing the thesis.",
+                        "final": "PM is finalizing the committee verdict and risk framing.",
+                    }
+                    preview_box = st.empty()
 
-                def on_progress(stage: str, state: str, preview: str | None = None) -> None:
-                    if state == "start":
-                        st.write(labels[stage])
-                        preview_box.info(previews[stage])
-                    elif state == "done" and preview:
-                        preview_box.info(preview)
+                    def on_progress(stage: str, state: str, preview: str | None = None) -> None:
+                        if state == "start":
+                            st.write(labels[stage])
+                            preview_box.info(previews[stage])
+                        elif state == "done" and preview:
+                            preview_box.info(preview)
 
-                result = run_committee(
-                    ticker,
-                    fundamentals,
-                    news,
-                    macro_summary=macro_summary,
-                    macro_commentary=macro_commentary,
-                    on_progress=on_progress,
-                )
-                preview_box.success("Reasoning complete.")
-                status.update(label="Committee complete", state="complete", expanded=False)
-            st.session_state["result"] = (ticker, result)
-        except Exception as exc:
-            st.error(f"The committee could not complete: {exc}")
+                    result = run_committee(
+                        ticker,
+                        fundamentals,
+                        news,
+                        macro_summary=macro_summary,
+                        macro_commentary=macro_commentary,
+                        on_progress=on_progress,
+                    )
+                    preview_box.success("Reasoning complete.")
+                    status.update(label="Committee complete", state="complete", expanded=False)
+                st.session_state["result"] = (ticker, result)
+            except Exception as exc:
+                st.error(f"The committee could not complete: {exc}")
 
 loaded_ticker = st.session_state.get("loaded_ticker", "")
 data_loaded_for_ticker = bool(

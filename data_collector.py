@@ -15,7 +15,8 @@ from bs4 import BeautifulSoup
 
 import config
 
-FMP_BASE_URL = "https://financialmodelingprep.com/stable"
+FMP_STABLE_BASE_URL = "https://financialmodelingprep.com/stable"
+FMP_V3_BASE_URL = "https://financialmodelingprep.com/api/v3"
 NEWS_URL = "https://news.google.com/rss/search?q={ticker}+stock"
 STREET_COMMENTARY_QUERIES = [
     (
@@ -86,13 +87,18 @@ def _pct_growth(latest: float | None, previous: float | None) -> float | None:
     return (latest - previous) / abs(previous)
 
 
-def _fmp_get(path: str, params: dict[str, Any] | None = None) -> Any:
+def _fmp_get(
+    path: str,
+    params: dict[str, Any] | None = None,
+    *,
+    base_url: str = FMP_STABLE_BASE_URL,
+) -> Any:
     if not config.FMP_API_KEY:
         raise RuntimeError("Missing FMP_API_KEY. Set it in your environment or .env file.")
     query = {"apikey": config.FMP_API_KEY}
     if params:
         query.update(params)
-    url = f"{FMP_BASE_URL}{path}?{urlencode(query, doseq=True)}"
+    url = f"{base_url}{path}?{urlencode(query, doseq=True)}"
     request = Request(
         url,
         headers={
@@ -113,6 +119,8 @@ def _fmp_get(path: str, params: dict[str, Any] | None = None) -> Any:
             raise RuntimeError(
                 "FMP request was rejected (401/403). Check FMP_API_KEY, plan access, and key validity."
             ) from exc
+        if exc.code == 402:
+            raise RuntimeError(f"FMP request requires a paid plan for {path} (HTTP 402).") from exc
         raise RuntimeError(f"FMP request failed for {path}: {exc}") from exc
     except (URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"FMP request failed for {path}: {exc}") from exc
@@ -264,6 +272,48 @@ def _enrich_google_entry(entry: Any) -> dict[str, str]:
     }
 
 
+def _fetch_fundamental_sources_stable(
+    ticker: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], Any, Any, Any, Any]:
+    symbol_params = {"symbol": ticker}
+    quote = _first_record(_fmp_get("/quote", symbol_params, base_url=FMP_STABLE_BASE_URL))
+    profile = _first_record(_fmp_get("/profile", symbol_params, base_url=FMP_STABLE_BASE_URL))
+    metrics_ttm = _first_record(
+        _fmp_get("/key-metrics-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL)
+    )
+    ratios_ttm = _first_record(_fmp_get("/ratios-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL))
+    income = _fmp_get("/income-statement", {**symbol_params, "limit": 2}, base_url=FMP_STABLE_BASE_URL)
+    balance = _fmp_get(
+        "/balance-sheet-statement", {**symbol_params, "limit": 1}, base_url=FMP_STABLE_BASE_URL
+    )
+    cashflow = _fmp_get("/cash-flow-statement", {**symbol_params, "limit": 1}, base_url=FMP_STABLE_BASE_URL)
+    price_history = _fmp_get("/historical-price-eod/full", symbol_params, base_url=FMP_STABLE_BASE_URL)
+    return quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history
+
+
+def _fetch_fundamental_sources_v3(
+    ticker: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], Any, Any, Any, Any]:
+    encoded = quote_plus(ticker)
+    quote = _first_record(_fmp_get(f"/quote/{encoded}", base_url=FMP_V3_BASE_URL))
+    profile = _first_record(_fmp_get(f"/profile/{encoded}", base_url=FMP_V3_BASE_URL))
+    metrics_ttm = _first_record(_fmp_get(f"/key-metrics-ttm/{encoded}", base_url=FMP_V3_BASE_URL))
+    ratios_ttm = _first_record(_fmp_get(f"/ratios-ttm/{encoded}", base_url=FMP_V3_BASE_URL))
+    income = _fmp_get(f"/income-statement/{encoded}", {"limit": 2}, base_url=FMP_V3_BASE_URL)
+    balance = _fmp_get(
+        f"/balance-sheet-statement/{encoded}",
+        {"limit": 1},
+        base_url=FMP_V3_BASE_URL,
+    )
+    cashflow = _fmp_get(f"/cash-flow-statement/{encoded}", {"limit": 1}, base_url=FMP_V3_BASE_URL)
+    price_history = _fmp_get(
+        f"/historical-price-full/{encoded}",
+        {"serietype": "line"},
+        base_url=FMP_V3_BASE_URL,
+    )
+    return quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history
+
+
 def get_stock_fundamentals(ticker: str) -> dict:
     """Pull valuation, margins, growth, balance sheet and technical data via FMP API."""
     ticker = ticker.strip().upper()
@@ -271,17 +321,22 @@ def get_stock_fundamentals(ticker: str) -> dict:
         return {"ticker": ticker, "error": "Ticker is required."}
 
     try:
-        symbol_params = {"symbol": ticker}
-        quote = _first_record(_fmp_get("/quote", symbol_params))
-        profile = _first_record(_fmp_get("/profile", symbol_params))
-        metrics_ttm = _first_record(_fmp_get("/key-metrics-ttm", symbol_params))
-        ratios_ttm = _first_record(_fmp_get("/ratios-ttm", symbol_params))
-        income = _fmp_get("/income-statement", {**symbol_params, "limit": 2})
-        balance = _fmp_get("/balance-sheet-statement", {**symbol_params, "limit": 1})
-        cashflow = _fmp_get("/cash-flow-statement", {**symbol_params, "limit": 1})
-        price_history = _fmp_get("/historical-price-eod/full", symbol_params)
-    except Exception as exc:
-        return {"ticker": ticker, "error": f"Failed to fetch market data: {exc}"}
+        quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history = (
+            _fetch_fundamental_sources_stable(ticker)
+        )
+    except Exception as stable_exc:
+        try:
+            quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history = (
+                _fetch_fundamental_sources_v3(ticker)
+            )
+        except Exception as v3_exc:
+            return {
+                "ticker": ticker,
+                "error": (
+                    "Failed to fetch market data: "
+                    f"stable error: {stable_exc} | v3 fallback error: {v3_exc}"
+                ),
+            }
 
     if isinstance(price_history, dict):
         historical = price_history.get("historical", [])
