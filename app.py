@@ -12,6 +12,8 @@ from data_collector import get_latest_news, get_stock_fundamentals, get_street_c
 
 st.set_page_config(page_title="Investment Committee", page_icon="📈", layout="wide")
 st.title("Multi-Agent Investment Committee 📈")
+model_used = config.HF_MODEL or "Configured dedicated endpoint"
+st.caption(f"Model used: `{model_used}`")
 st.write(
     "Enter a US stock ticker. Specialist analysts research it, a Portfolio Manager rules, "
     "a Devil's Advocate stress-tests the thesis, and the committee delivers a final verdict."
