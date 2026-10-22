@@ -288,6 +288,7 @@ def run_committee(
         f"Street macro consensus:\n{macro_summary or 'N/A'}\n\nStreet macro commentary items:\n"
         f"{macro_items_text or 'N/A'}"
     )
+    macro_summary_context = f"Street macro consensus:\n{macro_summary or 'N/A'}"
 
     notify("analysts", "start")
     jobs = {
@@ -327,7 +328,7 @@ def run_committee(
     notify("pm", "start")
     pm_initial = generate_response(
         PM_PROMPT,
-        f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n{reports}",
+        f"Ticker: {ticker}\n\nAnalyst summaries:\n{reports}",
         max_tokens=500,
     )
     pm_verdict = _parse_pm_verdict(pm_initial)
@@ -337,9 +338,9 @@ def run_committee(
     notify("devil", "start")
     devil = generate_response(
         DEVIL_PROMPT,
-        f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
+        f"Ticker: {ticker}\n\nAnalyst summaries:\n{reports}\n\n"
         f"You MUST defend this opposite verdict: {required_opposite}.\n\n"
-        f"{reports}\n\n## PM Initial Ruling\n{pm_initial}",
+        f"## PM Initial Ruling\n{pm_initial}",
         max_tokens=600,
     )
     notify("devil", "done", _first_sentences(devil))
@@ -347,9 +348,8 @@ def run_committee(
     notify("final", "start")
     final = generate_response(
         FINAL_PROMPT,
-        f"Ticker: {ticker}\n\n{macro_context}\n\nFull fundamentals JSON:\n{full_fundamentals_json}\n\n"
-        f"{reports}\n\n## PM Initial Ruling\n{pm_initial}\n\n"
-        f"## Devil's Advocate\n{devil}",
+        f"Ticker: {ticker}\n\n{macro_summary_context}\n\n"
+        f"## PM Initial Ruling\n{pm_initial}\n\n## Devil's Advocate\n{devil}",
         max_tokens=900,
     )
     notify("final", "done", _first_sentences(final))
