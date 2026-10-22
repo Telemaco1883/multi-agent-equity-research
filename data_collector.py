@@ -120,16 +120,6 @@ def _first_record(payload: Any) -> dict[str, Any]:
     return {}
 
 
-def _fmp_get_optional(path: str, params: dict[str, Any] | None = None) -> Any:
-    try:
-        return _fmp_get(path, params, base_url=FMP_STABLE_BASE_URL)
-    except RuntimeError as exc:
-        # Keep paid/entitlement endpoint failures non-fatal.
-        if "HTTP 402" in str(exc):
-            return None
-        return None
-
-
 def _latest_statement(payload: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(payload, list):
         return {}, {}
@@ -295,24 +285,34 @@ def get_stock_fundamentals(ticker: str) -> dict:
     if not profile:
         return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
 
-    income_payload = _fmp_get_optional(
-        "/income-statement",
-        {"symbol": ticker, "period": "annual", "limit": 2},
-    )
-    balance_payload = _fmp_get_optional(
-        "/balance-sheet-statement",
-        {"symbol": ticker, "period": "annual", "limit": 2},
-    )
-    cashflow_payload = _fmp_get_optional(
-        "/cash-flow-statement",
-        {"symbol": ticker, "period": "annual", "limit": 2},
-    )
-    ratios_payload = _fmp_get_optional("/ratios-ttm", {"symbol": ticker}) or _fmp_get_optional(
-        "/ratios", {"symbol": ticker, "period": "annual", "limit": 1}
-    )
-    metrics_payload = _fmp_get_optional("/key-metrics-ttm", {"symbol": ticker}) or _fmp_get_optional(
-        "/key-metrics", {"symbol": ticker, "period": "annual", "limit": 1}
-    )
+    try:
+        income_payload = _fmp_get(
+            "/income-statement",
+            {"symbol": ticker, "period": "annual", "limit": 2},
+            base_url=FMP_STABLE_BASE_URL,
+        )
+        balance_payload = _fmp_get(
+            "/balance-sheet-statement",
+            {"symbol": ticker, "period": "annual", "limit": 2},
+            base_url=FMP_STABLE_BASE_URL,
+        )
+        cashflow_payload = _fmp_get(
+            "/cash-flow-statement",
+            {"symbol": ticker, "period": "annual", "limit": 2},
+            base_url=FMP_STABLE_BASE_URL,
+        )
+        ratios_payload = _fmp_get(
+            "/ratios-ttm",
+            {"symbol": ticker},
+            base_url=FMP_STABLE_BASE_URL,
+        )
+        metrics_payload = _fmp_get(
+            "/key-metrics-ttm",
+            {"symbol": ticker},
+            base_url=FMP_STABLE_BASE_URL,
+        )
+    except Exception as exc:
+        return {"ticker": ticker, "error": f"Failed to fetch fundamentals: {exc}"}
 
     income_latest, income_prior = _latest_statement(income_payload)
     balance_latest, _ = _latest_statement(balance_payload)
@@ -386,6 +386,14 @@ def get_stock_fundamentals(ticker: str) -> dict:
         "name": profile.get("companyName") or ticker,
         "sector": profile.get("sector"),
         "industry": profile.get("industry"),
+        "raw_fmp": {
+            "profile": profile,
+            "income_statement": income_payload,
+            "balance_sheet_statement": balance_payload,
+            "cash_flow_statement": cashflow_payload,
+            "ratios_ttm": ratios_payload,
+            "key_metrics_ttm": metrics_payload,
+        },
         "price": price,
         "market_cap": _pick_number(profile.get("marketCap")),
         "valuation": {
@@ -394,7 +402,11 @@ def get_stock_fundamentals(ticker: str) -> dict:
                 ratios.get("priceEarningsRatio"),
                 profile.get("pe"),
             ),
-            "forward_pe": _pick_number(ratios.get("forwardPE"), metrics.get("forwardPE")),
+            "forward_pe": _pick_number(
+                metrics.get("forwardPE"),
+                ratios.get("forwardPE"),
+                _pick_number(ratios.get("priceToEarningsRatioTTM"), profile.get("pe")),
+            ),
             "ev_to_ebitda": _pick_number(
                 metrics.get("evToEBITDATTM"),
                 metrics.get("enterpriseValueOverEBITDATTM"),

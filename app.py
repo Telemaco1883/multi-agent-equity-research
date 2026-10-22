@@ -23,32 +23,6 @@ if missing:
 
 COLORS = {"BUY": "green", "HOLD": "orange", "SELL": "red"}
 
-
-def _fmt_num(value: float | int | None, decimals: int = 2) -> str:
-    if value is None:
-        return "N/A"
-    return f"{value:,.{decimals}f}"
-
-
-def _fmt_pct(value: float | None) -> str:
-    if value is None:
-        return "N/A"
-    return f"{value * 100:.1f}%"
-
-
-def _fmt_currency(value: float | int | None) -> str:
-    if value is None:
-        return "N/A"
-    abs_value = abs(value)
-    if abs_value >= 1_000_000_000_000:
-        return f"${value / 1_000_000_000_000:.2f}T"
-    if abs_value >= 1_000_000_000:
-        return f"${value / 1_000_000_000:.2f}B"
-    if abs_value >= 1_000_000:
-        return f"${value / 1_000_000:.2f}M"
-    return f"${value:,.2f}"
-
-
 def _render_ticker_data(
     ticker_symbol: str,
     fundamentals: dict,
@@ -56,12 +30,6 @@ def _render_ticker_data(
     macro_summary: str,
     macro_commentary: list[dict],
 ) -> None:
-    valuation = fundamentals.get("valuation", {})
-    margins = fundamentals.get("margins", {})
-    growth = fundamentals.get("growth", {})
-    balance_sheet = fundamentals.get("balance_sheet", {})
-    technicals = fundamentals.get("technicals", {})
-
     with st.expander("Street macro consensus (Step 1)", expanded=True):
         st.write(macro_summary or "No street macro commentary summary available.")
         if macro_commentary:
@@ -77,31 +45,9 @@ def _render_ticker_data(
         f"{fundamentals.get('sector') or 'N/A'} | "
         f"{fundamentals.get('industry') or 'N/A'}"
     )
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Price", _fmt_currency(fundamentals.get("price")))
-    c2.metric("Market Cap", _fmt_currency(fundamentals.get("market_cap")))
-    c3.metric("RSI (14)", _fmt_num(technicals.get("rsi_14"), 1))
+    with st.expander("Raw downloaded fundamentals data", expanded=True):
+        st.json(fundamentals.get("raw_fmp") or fundamentals)
 
-    c4, c5, c6 = st.columns(3)
-    c4.metric("Trailing P/E", _fmt_num(valuation.get("trailing_pe")))
-    c5.metric("Forward P/E", _fmt_num(valuation.get("forward_pe")))
-    c6.metric("P/S", _fmt_num(valuation.get("price_to_sales")))
-
-    c7, c8, c9 = st.columns(3)
-    c7.metric("Revenue Growth", _fmt_pct(growth.get("revenue_growth")))
-    c8.metric("Earnings Growth", _fmt_pct(growth.get("earnings_growth")))
-    c9.metric("Net Margin", _fmt_pct(margins.get("net")))
-
-    with st.expander("Balance sheet snapshot"):
-        st.write(
-            {
-                "Total cash": _fmt_currency(balance_sheet.get("total_cash")),
-                "Total debt": _fmt_currency(balance_sheet.get("total_debt")),
-                "Debt/Equity": _fmt_num(balance_sheet.get("debt_to_equity")),
-                "Current ratio": _fmt_num(balance_sheet.get("current_ratio")),
-                "Free cash flow": _fmt_currency(balance_sheet.get("free_cash_flow")),
-            }
-        )
     with st.expander("Recent headlines"):
         if news:
             for item in news:

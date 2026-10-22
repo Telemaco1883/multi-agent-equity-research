@@ -231,12 +231,9 @@ def run_committee(
         )
         for n in news
     ) or "No recent news available."
-    fund_json = json.dumps(
-        {k: v for k, v in fundamentals.items() if k != "technicals"}, indent=2, default=str
-    )
-    tech_json = json.dumps(
-        {"price": fundamentals.get("price"), **fundamentals.get("technicals", {})}, indent=2, default=str
-    )
+    raw_fundamentals = fundamentals.get("raw_fmp") or fundamentals
+    fund_json = json.dumps(raw_fundamentals, indent=2, default=str)
+    tech_json = json.dumps(raw_fundamentals, indent=2, default=str)
     macro_items_text = "\n\n".join(
         (
             f"Headline: {item.get('title', '')}\n"
@@ -269,8 +266,6 @@ def run_committee(
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {k: pool.submit(generate_response, s, u) for k, (s, u) in jobs.items()}
         analysts = {k: f.result() for k, f in futures.items()}
-    if _fundamental_response_is_incoherent(analysts["fundamental"], fundamentals):
-        analysts["fundamental"] = _deterministic_fundamental_memo(ticker, fundamentals)
     analysts_preview = "\n".join(
         [
             f"**Fundamental:** {_first_sentences(analysts['fundamental'])}",
