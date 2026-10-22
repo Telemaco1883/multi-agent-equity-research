@@ -6,8 +6,8 @@ import re
 import streamlit as st
 
 import config
-from committee import build_report, run_committee
-from data_collector import get_latest_news, get_stock_fundamentals
+from committee import build_report, run_committee, summarize_street_consensus
+from data_collector import get_latest_news, get_stock_fundamentals, get_street_commentary
 
 st.set_page_config(page_title="Investment Committee", page_icon="📈", layout="wide")
 st.title("Multi-Agent Investment Committee 📈")
@@ -49,12 +49,28 @@ def _fmt_currency(value: float | int | None) -> str:
     return f"${value:,.2f}"
 
 
-def _render_ticker_data(ticker_symbol: str, fundamentals: dict, news: list[dict]) -> None:
+def _render_ticker_data(
+    ticker_symbol: str,
+    fundamentals: dict,
+    news: list[dict],
+    macro_summary: str,
+    macro_commentary: list[dict],
+) -> None:
     valuation = fundamentals.get("valuation", {})
     margins = fundamentals.get("margins", {})
     growth = fundamentals.get("growth", {})
     balance_sheet = fundamentals.get("balance_sheet", {})
     technicals = fundamentals.get("technicals", {})
+
+    with st.expander("Street macro consensus (Step 1)", expanded=True):
+        st.write(macro_summary or "No street macro commentary summary available.")
+        if macro_commentary:
+            st.markdown("**Latest street commentary headlines**")
+            for item in macro_commentary[:8]:
+                st.markdown(
+                    f"- [{item.get('title', 'Untitled')}]({item.get('link', '')})"
+                    f" ({item.get('published', '')})"
+                )
 
     st.subheader(f"{fundamentals.get('name') or ticker_symbol} ({ticker_symbol})")
     st.caption(
@@ -104,6 +120,8 @@ ticker = st.text_input("Ticker", placeholder="TSLA", key="ticker_input").strip()
 if ticker and st.session_state.get("loaded_ticker") and ticker != st.session_state["loaded_ticker"]:
     st.session_state.pop("fundamentals", None)
     st.session_state.pop("news", None)
+    st.session_state.pop("macro_commentary", None)
+    st.session_state.pop("macro_summary", None)
     st.session_state.pop("result", None)
     st.session_state.pop("loaded_ticker", None)
 
@@ -115,7 +133,13 @@ if run:
         st.warning("Please enter a valid ticker symbol (e.g., TSLA).")
     else:
         with st.status("Collecting market data and news...", expanded=True) as status:
-            st.write("1/5 Fetching fundamentals and recent articles...")
+            st.write("1/6 Fetching latest street macro commentary...")
+            macro_commentary = get_street_commentary(limit=12)
+            macro_summary = summarize_street_consensus(macro_commentary)
+            if not macro_commentary:
+                st.write("⚠️ No street macro commentary found; consensus summary may be limited.")
+
+            st.write("2/6 Fetching fundamentals and recent articles...")
             fundamentals = get_stock_fundamentals(ticker)
             if "error" in fundamentals:
                 status.update(label="Data collection failed", state="error")
@@ -127,21 +151,23 @@ if run:
 
             st.session_state["fundamentals"] = fundamentals
             st.session_state["news"] = news
+            st.session_state["macro_commentary"] = macro_commentary
+            st.session_state["macro_summary"] = macro_summary
             st.session_state["loaded_ticker"] = ticker
             st.session_state.pop("result", None)
             status.update(label="Ticker data loaded", state="complete", expanded=False)
 
         st.markdown("### Ticker data loaded")
-        _render_ticker_data(ticker, fundamentals, news)
+        _render_ticker_data(ticker, fundamentals, news, macro_summary, macro_commentary)
         rendered_in_run = True
 
         try:
             with st.status("Running investment committee...", expanded=True) as status:
                 labels = {
-                    "analysts": "2/5 Parallel analyst research...",
-                    "pm": "3/5 Initial PM thesis...",
-                    "devil": "4/5 Devil's advocate challenge...",
-                    "final": "5/5 Final committee decision...",
+                    "analysts": "3/6 Parallel analyst research...",
+                    "pm": "4/6 Initial PM thesis...",
+                    "devil": "5/6 Devil's advocate challenge...",
+                    "final": "6/6 Final committee decision...",
                 }
                 previews = {
                     "analysts": "Analysts are scoring fundamentals, sentiment, and technicals.",
@@ -158,7 +184,14 @@ if run:
                     elif state == "done" and preview:
                         preview_box.info(preview)
 
-                result = run_committee(ticker, fundamentals, news, on_progress)
+                result = run_committee(
+                    ticker,
+                    fundamentals,
+                    news,
+                    macro_summary=macro_summary,
+                    macro_commentary=macro_commentary,
+                    on_progress=on_progress,
+                )
                 preview_box.success("Reasoning complete.")
                 status.update(label="Committee complete", state="complete", expanded=False)
             st.session_state["result"] = (ticker, result)
@@ -167,13 +200,22 @@ if run:
 
 loaded_ticker = st.session_state.get("loaded_ticker", "")
 data_loaded_for_ticker = bool(
-    loaded_ticker and "fundamentals" in st.session_state and "news" in st.session_state
+    loaded_ticker
+    and "fundamentals" in st.session_state
+    and "news" in st.session_state
+    and "macro_summary" in st.session_state
 )
 
 if data_loaded_for_ticker and not rendered_in_run:
     if ticker and ticker != loaded_ticker:
         st.info(f"Showing cached data for {loaded_ticker}. Click run to load {ticker}.")
-    _render_ticker_data(loaded_ticker, st.session_state["fundamentals"], st.session_state["news"])
+    _render_ticker_data(
+        loaded_ticker,
+        st.session_state["fundamentals"],
+        st.session_state["news"],
+        st.session_state.get("macro_summary", ""),
+        st.session_state.get("macro_commentary", []),
+    )
 
 if "result" in st.session_state:
     t, result = st.session_state["result"]

@@ -23,6 +23,12 @@ TECHNICAL_PROMPT = (
     "You are a Technical Analyst on an investment committee. Evaluate trend, momentum indicators "
     "(50/200-day MAs, RSI) and key support/resistance levels using ONLY the data provided."
 )
+MACRO_CONSENSUS_PROMPT = (
+    "You are a macro strategist. Summarize the street consensus from major institutions "
+    "(UBS, BlackRock, Goldman Sachs, JPMorgan, Morgan Stanley, Citi, Bank of America) based "
+    "ONLY on the commentary snippets provided. Output 4-6 concise bullet points covering: "
+    "rates/inflation view, growth outlook, risk sentiment, and positioning implications."
+)
 PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "
     "into an initial recommendation. Start with exactly two lines:\n"
@@ -156,10 +162,43 @@ def _first_sentences(text: str, max_sentences: int = 2) -> str:
     return preview[:360]
 
 
+def summarize_street_consensus(commentary: list[dict[str, Any]]) -> str:
+    """Create a concise macro consensus summary from street commentary items."""
+    if not commentary:
+        return "No major street macro commentary was found in the latest feed."
+    payload = "\n\n".join(
+        (
+            f"Headline: {item.get('title', '')}\n"
+            f"Published: {item.get('published', '')}\n"
+            f"Source: {item.get('link', '')}\n"
+            f"Content: {(item.get('article_text') or item.get('snippet') or '')[:900]}"
+        )
+        for item in commentary[:12]
+    )
+    try:
+        summary = generate_response(MACRO_CONSENSUS_PROMPT, payload, max_tokens=450)
+        if summary and summary.strip():
+            return summary.strip()
+    except Exception:
+        pass
+
+    fallback_lines = []
+    for item in commentary[:5]:
+        title = (item.get("title") or "").strip()
+        snippet = (item.get("snippet") or "").strip()
+        if title:
+            fallback_lines.append(f"- {title}")
+            if snippet:
+                fallback_lines.append(f"  {_first_sentences(snippet, 1)}")
+    return "\n".join(fallback_lines) if fallback_lines else "No macro consensus summary available."
+
+
 def run_committee(
     ticker: str,
     fundamentals: dict,
     news: list[dict],
+    macro_summary: str = "",
+    macro_commentary: list[dict[str, Any]] | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run the 4-stage committee and return all outputs.
@@ -187,12 +226,34 @@ def run_committee(
     tech_json = json.dumps(
         {"price": fundamentals.get("price"), **fundamentals.get("technicals", {})}, indent=2, default=str
     )
+    macro_items_text = "\n\n".join(
+        (
+            f"Headline: {item.get('title', '')}\n"
+            f"Published: {item.get('published', '')}\n"
+            f"Source: {item.get('link', '')}\n"
+            f"Content: {(item.get('article_text') or item.get('snippet') or '')[:800]}"
+        )
+        for item in (macro_commentary or [])[:8]
+    )
+    macro_context = (
+        f"Street macro consensus:\n{macro_summary or 'N/A'}\n\nStreet macro commentary items:\n"
+        f"{macro_items_text or 'N/A'}"
+    )
 
     notify("analysts", "start")
     jobs = {
-        "fundamental": (FUNDAMENTAL_PROMPT, f"Ticker: {ticker}\nFundamentals:\n{fund_json}"),
-        "sentiment": (SENTIMENT_PROMPT, f"Ticker: {ticker}\nRecent news:\n{news_text}"),
-        "technical": (TECHNICAL_PROMPT, f"Ticker: {ticker}\nTechnical data:\n{tech_json}"),
+        "fundamental": (
+            FUNDAMENTAL_PROMPT,
+            f"Ticker: {ticker}\n\n{macro_context}\n\nFundamentals:\n{fund_json}",
+        ),
+        "sentiment": (
+            SENTIMENT_PROMPT,
+            f"Ticker: {ticker}\n\n{macro_context}\n\nRecent news:\n{news_text}",
+        ),
+        "technical": (
+            TECHNICAL_PROMPT,
+            f"Ticker: {ticker}\n\n{macro_context}\n\nTechnical data:\n{tech_json}",
+        ),
     }
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {k: pool.submit(generate_response, s, u) for k, (s, u) in jobs.items()}

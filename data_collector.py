@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode, urlparse
@@ -18,6 +17,11 @@ import config
 
 FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 NEWS_URL = "https://news.google.com/rss/search?q={ticker}+stock"
+STREET_COMMENTARY_QUERY = (
+    "(UBS OR BlackRock OR Goldman Sachs OR JPMorgan OR Morgan Stanley OR Citi OR "
+    "\"Bank of America\") (macro OR inflation OR rates OR recession OR fed OR outlook OR economy) when:14d"
+)
+STREET_COMMENTARY_URL = "https://news.google.com/rss/search?q={query}"
 ARTICLE_TIMEOUT_SECONDS = 8
 ARTICLE_MAX_CHARS = 3500
 
@@ -375,3 +379,35 @@ def get_latest_news(ticker: str, limit: int = 8) -> list[dict]:
     with ThreadPoolExecutor(max_workers=min(6, len(entries))) as pool:
         enriched = list(pool.map(_enrich_google_entry, entries))
     return [item for item in enriched if item.get("title")]
+
+
+def get_street_commentary(limit: int = 12) -> list[dict]:
+    """Fetch recent macro commentary headlines from major street institutions."""
+    max_items = max(limit, 0)
+    if max_items == 0:
+        return []
+
+    try:
+        feed = feedparser.parse(STREET_COMMENTARY_URL.format(query=quote_plus(STREET_COMMENTARY_QUERY)))
+    except Exception:
+        return []
+    entries = (feed.entries or [])[: max(max_items * 2, max_items)]
+    if not entries:
+        return []
+
+    with ThreadPoolExecutor(max_workers=min(6, len(entries))) as pool:
+        enriched = list(pool.map(_enrich_google_entry, entries))
+
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for item in enriched:
+        title = (item.get("title") or "").strip()
+        link = (item.get("link") or "").strip()
+        key = link or title.lower()
+        if not title or not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+        if len(unique) >= max_items:
+            break
+    return unique
