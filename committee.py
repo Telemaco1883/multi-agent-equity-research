@@ -9,6 +9,7 @@ from typing import Any, Callable
 from llm_client import generate_response
 
 ProgressCallback = Callable[[str, str, str | None], None]  # (stage_key, "start" | "done", preview)
+MAX_INPUT_CHARS = 30_000
 
 FUNDAMENTAL_PROMPT = """
 You are the Fundamental Analyst on an investment committee.
@@ -175,11 +176,47 @@ def _first_sentences(text: str, max_sentences: int = 2) -> str:
     return preview[:360]
 
 
+def _pack_full_items_with_budget(items: list[str], max_chars: int) -> str:
+    """Pack whole items without truncating each item; stop when max total chars would be exceeded."""
+    packed: list[str] = []
+    used = 0
+    for item in items:
+        text = (item or "").strip()
+        if not text:
+            continue
+        add = len(text) + (2 if packed else 0)
+        if used + add > max_chars:
+            break
+        packed.append(text)
+        used += add
+    return "\n\n".join(packed)
+
+
+def _llm_fundamentals_json(fundamentals: dict[str, Any]) -> str:
+    """Pack full sections (no per-section truncation) up to a safe total prompt budget."""
+    sections = []
+    ordered_keys = [
+        "profile",
+        "income_statement",
+        "balance_sheet_statement",
+        "cash_flow_statement",
+        "ratios_ttm",
+        "key_metrics_ttm",
+        "technical_summary",
+    ]
+    for key in ordered_keys:
+        if key in fundamentals:
+            section_json = json.dumps(fundamentals[key], indent=2, default=str)
+            sections.append(f"{key}:\n{section_json}")
+    packed = _pack_full_items_with_budget(sections, max_chars=12_000)
+    return packed or "{}"
+
+
 def summarize_street_consensus(commentary: list[dict[str, Any]]) -> str:
     """Create a concise macro consensus summary from street commentary items."""
     if not commentary:
         return "No major street macro commentary was found in the latest feed."
-    payload = "\n\n".join(
+    macro_items = [
         (
             f"Headline: {item.get('title', '')}\n"
             f"Published: {item.get('published', '')}\n"
@@ -187,7 +224,8 @@ def summarize_street_consensus(commentary: list[dict[str, Any]]) -> str:
             f"Content: {(item.get('article_text') or item.get('snippet') or '')}"
         )
         for item in commentary
-    )
+    ]
+    payload = _pack_full_items_with_budget(macro_items, max_chars=MAX_INPUT_CHARS - 6_000)
     try:
         summary = generate_response(MACRO_CONSENSUS_PROMPT, payload, max_tokens=800)
         if summary and summary.strip():
@@ -224,7 +262,7 @@ def run_committee(
         if on_progress:
             on_progress(stage, status, preview)
 
-    news_text = "\n\n".join(
+    news_items = [
         (
             f"Headline: {n.get('title', '')}\n"
             f"Published: {n.get('published', '')}\n"
@@ -232,10 +270,11 @@ def run_committee(
             f"Content: {(n.get('article_text') or n.get('snippet') or '')}"
         )
         for n in news
-    ) or "No recent news available."
-    full_fundamentals_json = json.dumps(fundamentals, indent=2, default=str)
+    ]
+    news_text = _pack_full_items_with_budget(news_items, max_chars=8_000) or "No recent news available."
+    full_fundamentals_json = _llm_fundamentals_json(fundamentals)
     technical_summary_json = json.dumps(fundamentals.get("technical_summary", {}), indent=2, default=str)
-    macro_items_text = "\n\n".join(
+    macro_items = [
         (
             f"Headline: {item.get('title', '')}\n"
             f"Published: {item.get('published', '')}\n"
@@ -243,7 +282,8 @@ def run_committee(
             f"Content: {(item.get('article_text') or item.get('snippet') or '')}"
         )
         for item in (macro_commentary or [])
-    )
+    ]
+    macro_items_text = _pack_full_items_with_budget(macro_items, max_chars=8_000)
     macro_context = (
         f"Street macro consensus:\n{macro_summary or 'N/A'}\n\nStreet macro commentary items:\n"
         f"{macro_items_text or 'N/A'}"
