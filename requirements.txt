@@ -1,8 +1,6 @@
 streamlit>=1.37,<2
 huggingface_hub
 openai
-yfinance
-feedparser
 beautifulsoup4
 python-dotenv
 pandas
