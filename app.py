@@ -9,7 +9,7 @@ import config
 from committee import build_report, run_committee
 from data_collector import get_latest_news, get_stock_fundamentals
 
-st.set_page_config(page_title="Investment Committee", page_icon="📈", layout="centered")
+st.set_page_config(page_title="Investment Committee", page_icon="📈", layout="wide")
 st.title("Multi-Agent Investment Committee 📈")
 st.write(
     "Enter a US stock ticker. Specialist analysts research it, a Portfolio Manager rules, "
@@ -49,51 +49,14 @@ def _fmt_currency(value: float | int | None) -> str:
     return f"${value:,.2f}"
 
 
-ticker = st.text_input("Ticker", placeholder="TSLA").strip().upper()
-if ticker and st.session_state.get("loaded_ticker") and ticker != st.session_state["loaded_ticker"]:
-    st.session_state.pop("fundamentals", None)
-    st.session_state.pop("news", None)
-    st.session_state.pop("result", None)
-    st.session_state.pop("loaded_ticker", None)
-
-load_data = st.button("1) Load ticker data")
-
-if load_data:
-    if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
-        st.warning("Please enter a valid ticker symbol (e.g., TSLA).")
-    else:
-        with st.status("Collecting market data and news...", expanded=True) as status:
-            fundamentals = get_stock_fundamentals(ticker)
-            if "error" in fundamentals:
-                status.update(label="Data collection failed", state="error")
-                st.error(fundamentals["error"])
-                st.stop()
-            news = get_latest_news(ticker)
-            if not news:
-                st.write("⚠️ No recent news found; sentiment analysis may be limited.")
-
-            st.session_state["fundamentals"] = fundamentals
-            st.session_state["news"] = news
-            st.session_state["loaded_ticker"] = ticker
-            st.session_state.pop("result", None)
-            status.update(label="Ticker data loaded", state="complete", expanded=False)
-
-data_loaded_for_ticker = (
-    ticker
-    and st.session_state.get("loaded_ticker") == ticker
-    and "fundamentals" in st.session_state
-)
-
-if data_loaded_for_ticker:
-    fundamentals = st.session_state["fundamentals"]
-    news = st.session_state["news"]
+def _render_ticker_data(ticker_symbol: str, fundamentals: dict, news: list[dict]) -> None:
     valuation = fundamentals.get("valuation", {})
     margins = fundamentals.get("margins", {})
     growth = fundamentals.get("growth", {})
     balance_sheet = fundamentals.get("balance_sheet", {})
     technicals = fundamentals.get("technicals", {})
 
-    st.subheader(f"{fundamentals.get('name') or ticker} ({ticker})")
+    st.subheader(f"{fundamentals.get('name') or ticker_symbol} ({ticker_symbol})")
     st.caption(
         f"{fundamentals.get('sector') or 'N/A'} | "
         f"{fundamentals.get('industry') or 'N/A'}"
@@ -136,33 +99,78 @@ if data_loaded_for_ticker:
         else:
             st.write("No recent headlines found.")
 
-run = st.button(
-    "2) Run Investment Committee",
-    type="primary",
-    disabled=not data_loaded_for_ticker,
-)
+
+ticker = st.text_input("Ticker", placeholder="TSLA").strip().upper()
+if ticker and st.session_state.get("loaded_ticker") and ticker != st.session_state["loaded_ticker"]:
+    st.session_state.pop("fundamentals", None)
+    st.session_state.pop("news", None)
+    st.session_state.pop("result", None)
+    st.session_state.pop("loaded_ticker", None)
+
+run = st.button("Run Investment Committee", type="primary")
+rendered_in_run = False
 
 if run:
-    try:
-        fundamentals = st.session_state["fundamentals"]
-        news = st.session_state["news"]
-        with st.status("Running investment committee...", expanded=True) as status:
-            labels = {
-                "analysts": "1/4 Parallel analyst research...",
-                "pm": "2/4 Initial PM thesis...",
-                "devil": "3/4 Devil's advocate challenge...",
-                "final": "4/4 Final committee decision...",
-            }
+    if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
+        st.warning("Please enter a valid ticker symbol (e.g., TSLA).")
+    else:
+        with st.status("Collecting market data and news...", expanded=True) as status:
+            st.write("1/5 Fetching fundamentals and recent articles...")
+            fundamentals = get_stock_fundamentals(ticker)
+            if "error" in fundamentals:
+                status.update(label="Data collection failed", state="error")
+                st.error(fundamentals["error"])
+                st.stop()
+            news = get_latest_news(ticker, limit=20)
+            if not news:
+                st.write("⚠️ No recent news found; sentiment analysis may be limited.")
 
-            def on_progress(stage: str, state: str) -> None:
-                if state == "start":
-                    st.write(labels[stage])
+            st.session_state["fundamentals"] = fundamentals
+            st.session_state["news"] = news
+            st.session_state["loaded_ticker"] = ticker
+            st.session_state.pop("result", None)
+            status.update(label="Ticker data loaded", state="complete", expanded=False)
 
-            result = run_committee(ticker, fundamentals, news, on_progress)
-            status.update(label="Committee complete", state="complete", expanded=False)
-        st.session_state["result"] = (ticker, result)
-    except Exception as exc:
-        st.error(f"The committee could not complete: {exc}")
+        st.markdown("### Ticker data loaded")
+        _render_ticker_data(ticker, fundamentals, news)
+        rendered_in_run = True
+
+        try:
+            with st.status("Running investment committee...", expanded=True) as status:
+                labels = {
+                    "analysts": "2/5 Parallel analyst research...",
+                    "pm": "3/5 Initial PM thesis...",
+                    "devil": "4/5 Devil's advocate challenge...",
+                    "final": "5/5 Final committee decision...",
+                }
+                previews = {
+                    "analysts": "Analysts are scoring fundamentals, sentiment, and technicals.",
+                    "pm": "PM is synthesizing the first recommendation.",
+                    "devil": "Devil's Advocate is stress-testing the thesis.",
+                    "final": "PM is finalizing the committee verdict and risk framing.",
+                }
+                preview_box = st.empty()
+
+                def on_progress(stage: str, state: str) -> None:
+                    if state == "start":
+                        st.write(labels[stage])
+                        preview_box.info(previews[stage])
+
+                result = run_committee(ticker, fundamentals, news, on_progress)
+                preview_box.success("Reasoning complete.")
+                status.update(label="Committee complete", state="complete", expanded=False)
+            st.session_state["result"] = (ticker, result)
+        except Exception as exc:
+            st.error(f"The committee could not complete: {exc}")
+
+data_loaded_for_ticker = (
+    ticker
+    and st.session_state.get("loaded_ticker") == ticker
+    and "fundamentals" in st.session_state
+)
+
+if data_loaded_for_ticker and not rendered_in_run:
+    _render_ticker_data(ticker, st.session_state["fundamentals"], st.session_state["news"])
 
 if "result" in st.session_state:
     t, result = st.session_state["result"]

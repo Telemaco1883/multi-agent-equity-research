@@ -42,6 +42,92 @@ FINAL_PROMPT = (
 )
 
 
+def _is_num(value: Any) -> bool:
+    return isinstance(value, (int, float))
+
+
+def _fmt(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    if isinstance(value, (int, float)):
+        return f"{value:,.3f}" if abs(value) < 100 else f"{value:,.2f}"
+    return str(value)
+
+
+def _fundamentals_completeness(fundamentals: dict[str, Any]) -> float:
+    keys = [
+        ("valuation", "trailing_pe"),
+        ("valuation", "forward_pe"),
+        ("valuation", "ev_to_ebitda"),
+        ("valuation", "price_to_sales"),
+        ("valuation", "peg_ratio"),
+        ("margins", "gross"),
+        ("margins", "operating"),
+        ("margins", "net"),
+        ("growth", "revenue_growth"),
+        ("growth", "earnings_growth"),
+        ("balance_sheet", "total_cash"),
+        ("balance_sheet", "total_debt"),
+        ("balance_sheet", "debt_to_equity"),
+        ("balance_sheet", "current_ratio"),
+        ("balance_sheet", "free_cash_flow"),
+    ]
+    present = 0
+    for section, key in keys:
+        if fundamentals.get(section, {}).get(key) is not None:
+            present += 1
+    return present / len(keys)
+
+
+def _deterministic_fundamental_memo(ticker: str, fundamentals: dict[str, Any]) -> str:
+    v = fundamentals.get("valuation", {})
+    m = fundamentals.get("margins", {})
+    g = fundamentals.get("growth", {})
+    b = fundamentals.get("balance_sheet", {})
+    lines = [
+        f"Fundamental view for {ticker} (data-backed summary):",
+        "",
+        "Valuation:",
+        f"- Trailing P/E: {_fmt(v.get('trailing_pe'))}",
+        f"- Forward P/E: {_fmt(v.get('forward_pe'))}",
+        f"- EV/EBITDA: {_fmt(v.get('ev_to_ebitda'))}",
+        f"- Price/Sales: {_fmt(v.get('price_to_sales'))}",
+        f"- PEG Ratio: {_fmt(v.get('peg_ratio'))}",
+        "",
+        "Profitability:",
+        f"- Gross margin: {_fmt(m.get('gross'))}",
+        f"- Operating margin: {_fmt(m.get('operating'))}",
+        f"- Net margin: {_fmt(m.get('net'))}",
+        "",
+        "Growth:",
+        f"- Revenue growth: {_fmt(g.get('revenue_growth'))}",
+        f"- Earnings growth: {_fmt(g.get('earnings_growth'))}",
+        "",
+        "Balance sheet / cash:",
+        f"- Total cash: {_fmt(b.get('total_cash'))}",
+        f"- Total debt: {_fmt(b.get('total_debt'))}",
+        f"- Debt/Equity: {_fmt(b.get('debt_to_equity'))}",
+        f"- Current ratio: {_fmt(b.get('current_ratio'))}",
+        f"- Free cash flow: {_fmt(b.get('free_cash_flow'))}",
+    ]
+    return "\n".join(lines)
+
+
+def _fundamental_response_is_incoherent(response: str, fundamentals: dict[str, Any]) -> bool:
+    if not response:
+        return True
+    lower = response.lower()
+    available = _fundamentals_completeness(fundamentals)
+    if available < 0.45:
+        return False
+    missing_hits = lower.count("missing data")
+    if missing_hits >= 3:
+        return True
+    if "without sufficient data" in lower and available >= 0.6:
+        return True
+    return False
+
+
 def parse_verdict(text: str) -> tuple[str, str]:
     """Extract (verdict, conviction) from PM output, defaulting to HOLD / Low."""
     verdict = re.search(r"VERDICT\W*(BUY|HOLD|SELL)", text, re.IGNORECASE)
@@ -100,6 +186,8 @@ def run_committee(
     with ThreadPoolExecutor(max_workers=3) as pool:
         futures = {k: pool.submit(generate_response, s, u) for k, (s, u) in jobs.items()}
         analysts = {k: f.result() for k, f in futures.items()}
+    if _fundamental_response_is_incoherent(analysts["fundamental"], fundamentals):
+        analysts["fundamental"] = _deterministic_fundamental_memo(ticker, fundamentals)
     notify("analysts", "done")
 
     reports = "\n\n".join(f"## {k.title()} Analyst\n{v}" for k, v in analysts.items())
