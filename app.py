@@ -130,6 +130,9 @@ if data_loaded_for_ticker:
                     f"- [{item.get('title', 'Untitled')}]({item.get('link', '')})"
                     f" ({item.get('published', '')})"
                 )
+                excerpt = (item.get("article_text") or item.get("snippet") or "").strip()
+                if excerpt:
+                    st.caption(excerpt[:320] + ("..." if len(excerpt) > 320 else ""))
         else:
             st.write("No recent headlines found.")
 

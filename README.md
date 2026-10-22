@@ -11,3 +11,5 @@ streamlit run app.py
 Workflow in the app:
 1. Load a ticker to fetch and display market data/news.
 2. Run the investment committee on the loaded ticker dataset.
+
+News ingestion is resilient: it uses direct finance news feeds first and attempts full-article text extraction, with snippet fallback when an article cannot be parsed.

@@ -75,8 +75,14 @@ def run_committee(
         if on_progress:
             on_progress(stage, status)
 
-    news_text = "\n".join(
-        f"- {n['title']} ({n['published']}): {n['snippet']}" for n in news
+    news_text = "\n\n".join(
+        (
+            f"Headline: {n.get('title', '')}\n"
+            f"Published: {n.get('published', '')}\n"
+            f"Source: {n.get('link', '')}\n"
+            f"Content: {(n.get('article_text') or n.get('snippet') or '')[:1200]}"
+        )
+        for n in news
     ) or "No recent news available."
     fund_json = json.dumps(
         {k: v for k, v in fundamentals.items() if k != "technicals"}, indent=2, default=str
