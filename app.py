@@ -24,6 +24,34 @@ if missing:
 
 COLORS = {"BUY": "green", "NEUTRAL": "orange", "SELL": "red"}
 
+
+def _render_technical_charts(fundamentals: dict) -> None:
+    technical_chart = fundamentals.get("technical_chart") or []
+    if not technical_chart:
+        st.info("Technical chart unavailable: no historical chart series returned.")
+        return
+    chart_df = pd.DataFrame(technical_chart)
+    if chart_df.empty or "date" not in chart_df.columns:
+        st.info("Technical chart unavailable: chart data shape is invalid.")
+        return
+    chart_df["date"] = pd.to_datetime(chart_df["date"], errors="coerce")
+    chart_df = chart_df.dropna(subset=["date"]).set_index("date")
+
+    price_cols = [col for col in ["close", "sma_20", "sma_50", "sma_100", "sma_200", "ema_21", "ema_50"] if col in chart_df.columns]
+    if price_cols:
+        st.markdown("**Price + MA/EMA**")
+        st.line_chart(chart_df[price_cols], use_container_width=True)
+
+    if "rsi_14" in chart_df.columns:
+        st.markdown("**RSI (14)**")
+        st.line_chart(chart_df[["rsi_14"]], use_container_width=True)
+
+    macd_cols = [col for col in ["macd", "macd_signal", "macd_hist"] if col in chart_df.columns]
+    if macd_cols:
+        st.markdown("**MACD**")
+        st.line_chart(chart_df[macd_cols], use_container_width=True)
+
+
 def _render_ticker_data(
     ticker_symbol: str,
     fundamentals: dict,
@@ -43,24 +71,6 @@ def _render_ticker_data(
                     )
 
     with st.expander("2) Raw downloaded data", expanded=True):
-        st.markdown("**Technical chart (price + moving averages)**")
-        technical_chart = fundamentals.get("technical_chart") or []
-        if technical_chart:
-            chart_df = pd.DataFrame(technical_chart)
-            if not chart_df.empty and "date" in chart_df.columns:
-                chart_df["date"] = pd.to_datetime(chart_df["date"], errors="coerce")
-                chart_df = chart_df.dropna(subset=["date"]).set_index("date")
-                line_cols = [col for col in ["close", "sma_20", "sma_50", "sma_100", "sma_200", "ema_21", "ema_50"] if col in chart_df.columns]
-                if line_cols:
-                    st.line_chart(chart_df[line_cols], use_container_width=True)
-                osc_cols = [col for col in ["rsi_14"] if col in chart_df.columns]
-                if osc_cols:
-                    st.markdown("**RSI (14)**")
-                    st.line_chart(chart_df[osc_cols], use_container_width=True)
-                macd_cols = [col for col in ["macd", "macd_signal", "macd_hist"] if col in chart_df.columns]
-                if macd_cols:
-                    st.markdown("**MACD**")
-                    st.line_chart(chart_df[macd_cols], use_container_width=True)
         tech_summary = fundamentals.get("technical_summary")
         if tech_summary:
             st.markdown("**Technical summary**")
@@ -89,6 +99,11 @@ def _render_ticker_data(
     with st.expander("4) Sentiment analyst", expanded=False):
         st.write(result["analysts"]["sentiment"])
     with st.expander("5) Technical analyst", expanded=False):
+        _render_technical_charts(fundamentals)
+        tech_summary = fundamentals.get("technical_summary")
+        if tech_summary:
+            st.markdown("**Technical summary used by analyst**")
+            st.json(tech_summary)
         st.write(result["analysts"]["technical"])
     with st.expander("6) PM initial ruling", expanded=False):
         st.write(result["pm_initial"])
@@ -113,9 +128,20 @@ run = st.button("Run Investment Committee", type="primary")
 rendered_in_run = False
 
 cached_fundamentals = st.session_state.get("fundamentals")
-if isinstance(cached_fundamentals, dict) and "profile" not in cached_fundamentals:
+if isinstance(cached_fundamentals, dict) and (
+    "profile" not in cached_fundamentals
+    or "technical_summary" not in cached_fundamentals
+    or "technical_chart" not in cached_fundamentals
+):
     st.session_state.pop("fundamentals", None)
     st.session_state.pop("result", None)
+
+cached_result = st.session_state.get("result")
+if isinstance(cached_result, tuple) and len(cached_result) == 2 and isinstance(cached_result[1], dict):
+    analysts = cached_result[1].get("analysts", {})
+    technical_text = str(analysts.get("technical", ""))
+    if "Confidence:" in technical_text:
+        st.session_state.pop("result", None)
 
 if run:
     if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):

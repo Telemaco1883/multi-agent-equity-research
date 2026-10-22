@@ -269,11 +269,34 @@ def _enrich_google_entry(entry: Any) -> dict[str, str]:
 
 
 def _build_technical_payload(historical_payload: Any) -> dict[str, Any]:
-    rows = historical_payload if isinstance(historical_payload, list) else []
+    rows: list[dict[str, Any]] = []
+    if isinstance(historical_payload, list):
+        rows = [row for row in historical_payload if isinstance(row, dict)]
+    elif isinstance(historical_payload, dict):
+        for key in ("historical", "prices", "data"):
+            candidate = historical_payload.get(key)
+            if isinstance(candidate, list):
+                rows = [row for row in candidate if isinstance(row, dict)]
+                if rows:
+                    break
+        if not rows:
+            stock_list = historical_payload.get("historicalStockList")
+            if isinstance(stock_list, list):
+                for item in stock_list:
+                    if not isinstance(item, dict):
+                        continue
+                    candidate = item.get("historical")
+                    if isinstance(candidate, list):
+                        rows = [row for row in candidate if isinstance(row, dict)]
+                        if rows:
+                            break
     if not rows:
         return {"technical_summary": {"error": "No historical price payload returned"}, "technical_chart": []}
 
     df = pd.DataFrame(rows)
+    df.columns = [str(col).strip().lower() for col in df.columns]
+    if "close" not in df.columns and "adjclose" in df.columns:
+        df["close"] = df["adjclose"]
     required = {"date", "high", "low", "close", "volume"}
     if not required.issubset(df.columns):
         return {
