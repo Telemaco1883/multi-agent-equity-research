@@ -30,6 +30,12 @@ def _render_ticker_data(
     macro_summary: str,
     macro_commentary: list[dict],
 ) -> None:
+    profile_rows = fundamentals.get("profile")
+    profile = profile_rows[0] if isinstance(profile_rows, list) and profile_rows else {}
+    name = profile.get("companyName") or ticker_symbol
+    sector = profile.get("sector") or "N/A"
+    industry = profile.get("industry") or "N/A"
+
     with st.expander("Street macro consensus (Step 1)", expanded=True):
         st.write(macro_summary or "No street macro commentary summary available.")
         if macro_commentary:
@@ -40,11 +46,8 @@ def _render_ticker_data(
                         f" ({item.get('published', '')})"
                     )
 
-    st.subheader(f"{fundamentals.get('name') or ticker_symbol} ({ticker_symbol})")
-    st.caption(
-        f"{fundamentals.get('sector') or 'N/A'} | "
-        f"{fundamentals.get('industry') or 'N/A'}"
-    )
+    st.subheader(f"{name} ({ticker_symbol})")
+    st.caption(f"{sector} | {industry}")
     with st.expander("Raw downloaded fundamentals data", expanded=True):
         st.json(fundamentals)
 
@@ -73,6 +76,11 @@ if ticker and st.session_state.get("loaded_ticker") and ticker != st.session_sta
 
 run = st.button("Run Investment Committee", type="primary")
 rendered_in_run = False
+
+cached_fundamentals = st.session_state.get("fundamentals")
+if isinstance(cached_fundamentals, dict) and "profile" not in cached_fundamentals:
+    st.session_state.pop("fundamentals", None)
+    st.session_state.pop("result", None)
 
 if run:
     if not re.fullmatch(r"[A-Z.\-]{1,10}", ticker):
