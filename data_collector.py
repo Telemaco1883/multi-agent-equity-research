@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from urllib.error import URLError
@@ -17,6 +18,8 @@ from bs4 import BeautifulSoup
 
 NEWS_URL = "https://news.google.com/rss/search?q={ticker}+stock"
 YAHOO_NEWS_URL = "https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
+YF_QUOTE_SUMMARY_URL = "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{ticker}?modules={modules}"
+YF_CHART_URL = "https://query2.finance.yahoo.com/v8/finance/chart/{ticker}?range={range_}&interval=1d"
 ARTICLE_TIMEOUT_SECONDS = 8
 ARTICLE_MAX_CHARS = 3500
 
@@ -43,6 +46,123 @@ def _rsi(close: pd.Series, period: int = 14) -> float | None:
     if last_loss == 0:
         return 100.0
     return float(100 - 100 / (1 + last_gain / last_loss))
+
+
+def _pick_number(*values: Any) -> float | None:
+    for value in values:
+        n = _num(value)
+        if n is not None:
+            return n
+    return None
+
+
+def _obj_get(obj: Any, key: str) -> Any:
+    if obj is None:
+        return None
+    try:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        getter = getattr(obj, "get", None)
+        if callable(getter):
+            return getter(key)
+        return getattr(obj, key, None)
+    except Exception:
+        return None
+
+
+def _extract_close_series(hist: pd.DataFrame, ticker: str) -> pd.Series:
+    if hist is None or hist.empty:
+        return pd.Series(dtype="float64")
+    if isinstance(hist, pd.Series):
+        return hist.dropna()
+
+    for key in ("Close", "close", "Adj Close", "adj close"):
+        if key in hist.columns:
+            return pd.to_numeric(hist[key], errors="coerce").dropna()
+
+    if isinstance(hist.columns, pd.MultiIndex):
+        for key in ("Close", "close", "Adj Close", "adj close"):
+            cols = [c for c in hist.columns if str(c[-1]).upper() == ticker and str(c[0]) == key]
+            if cols:
+                return pd.to_numeric(hist[cols[0]], errors="coerce").dropna()
+            cols = [c for c in hist.columns if str(c[0]) == key]
+            if cols:
+                series = hist[cols[0]]
+                if isinstance(series, pd.DataFrame):
+                    series = series.iloc[:, 0]
+                return pd.to_numeric(series, errors="coerce").dropna()
+    return pd.Series(dtype="float64")
+
+
+def _yf_raw(value: Any) -> Any:
+    if isinstance(value, dict):
+        if "raw" in value:
+            return value.get("raw")
+        if "fmt" in value and value.get("fmt") is not None:
+            return value.get("fmt")
+    return value
+
+
+def _nested_get(data: dict[str, Any], *keys: str) -> Any:
+    current: Any = data
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return _yf_raw(current)
+
+
+def _fetch_json(url: str, timeout: int = 8, retries: int = 3, backoff: float = 1.3) -> dict[str, Any] | None:
+    request = Request(
+        url,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            )
+        },
+    )
+    for attempt in range(retries):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                payload = response.read().decode(charset, errors="ignore")
+                parsed = json.loads(payload)
+                if isinstance(parsed, dict):
+                    return parsed
+        except (URLError, TimeoutError, ValueError, json.JSONDecodeError):
+            pass
+        if attempt < retries - 1:
+            time.sleep(backoff**attempt)
+    return None
+
+
+def _fetch_quote_summary(ticker: str) -> dict[str, Any]:
+    modules = ",".join(
+        ["price", "summaryDetail", "financialData", "defaultKeyStatistics", "assetProfile"]
+    )
+    url = YF_QUOTE_SUMMARY_URL.format(ticker=quote_plus(ticker), modules=modules)
+    payload = _fetch_json(url)
+    if not payload:
+        return {}
+    result = payload.get("quoteSummary", {}).get("result") or []
+    if result and isinstance(result[0], dict):
+        return result[0]
+    return {}
+
+
+def _fetch_chart_close(ticker: str, range_: str = "1y") -> pd.Series:
+    url = YF_CHART_URL.format(ticker=quote_plus(ticker), range_=range_)
+    payload = _fetch_json(url)
+    if not payload:
+        return pd.Series(dtype="float64")
+    result = payload.get("chart", {}).get("result") or []
+    if not result:
+        return pd.Series(dtype="float64")
+    indicators = result[0].get("indicators", {})
+    quote = (indicators.get("quote") or [{}])[0]
+    close = quote.get("close") or []
+    return pd.to_numeric(pd.Series(close), errors="coerce").dropna()
 
 
 def _clean_text(text: str) -> str:
@@ -281,51 +401,142 @@ def get_stock_fundamentals(ticker: str) -> dict:
             hist = stock.history(period="6mo")
         if hist is None or hist.empty:
             hist = yf.download(ticker, period="6mo", progress=False, threads=False)
+        quote_summary = _fetch_quote_summary(ticker)
     except Exception as exc:
         return {"ticker": ticker, "error": f"Failed to fetch market data: {exc}"}
 
     if hist is None or hist.empty:
-        return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
+        chart_close = _fetch_chart_close(ticker, "1y")
+        if chart_close.empty:
+            chart_close = _fetch_chart_close(ticker, "6mo")
+        if chart_close.empty:
+            return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
+        close = chart_close
+    else:
+        close = _extract_close_series(hist, ticker)
 
-    close = hist["Close"].dropna()
-    fast_info = getattr(stock, "fast_info", {}) or {}
-    price = _num(close.iloc[-1]) if len(close) else _num(fast_info.get("lastPrice"))
+    if close.empty:
+        return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
+    fast_info = getattr(stock, "fast_info", None)
+    summary_price = quote_summary.get("price", {})
+    summary_detail = quote_summary.get("summaryDetail", {})
+    financial_data = quote_summary.get("financialData", {})
+    default_stats = quote_summary.get("defaultKeyStatistics", {})
+    asset_profile = quote_summary.get("assetProfile", {})
+
+    price = _pick_number(
+        close.iloc[-1] if len(close) else None,
+        _obj_get(fast_info, "lastPrice"),
+        _obj_get(fast_info, "last_price"),
+        _nested_get(summary_price, "regularMarketPrice"),
+        info.get("currentPrice"),
+        info.get("regularMarketPrice"),
+        info.get("previousClose"),
+    )
+    market_cap = _pick_number(
+        info.get("marketCap"),
+        _obj_get(fast_info, "marketCap"),
+        _obj_get(fast_info, "market_cap"),
+        _nested_get(summary_price, "marketCap"),
+        _nested_get(default_stats, "marketCap"),
+    )
     data.update(
         {
-            "name": info.get("longName") or info.get("shortName") or ticker,
-            "sector": info.get("sector"),
-            "industry": info.get("industry"),
+            "name": (
+                info.get("longName")
+                or info.get("shortName")
+                or _nested_get(summary_price, "longName")
+                or _nested_get(summary_price, "shortName")
+                or ticker
+            ),
+            "sector": info.get("sector") or _nested_get(asset_profile, "sector"),
+            "industry": info.get("industry") or _nested_get(asset_profile, "industry"),
             "price": price,
-            "market_cap": _num(info.get("marketCap")) or _num(fast_info.get("marketCap")),
+            "market_cap": market_cap,
             "valuation": {
-                "trailing_pe": _num(info.get("trailingPE")),
-                "forward_pe": _num(info.get("forwardPE")),
-                "ev_to_ebitda": _num(info.get("enterpriseToEbitda")),
-                "price_to_sales": _num(info.get("priceToSalesTrailing12Months")),
-                "peg_ratio": _num(info.get("pegRatio")),
+                "trailing_pe": _pick_number(
+                    info.get("trailingPE"),
+                    _nested_get(summary_detail, "trailingPE"),
+                    _nested_get(default_stats, "trailingPE"),
+                ),
+                "forward_pe": _pick_number(
+                    info.get("forwardPE"),
+                    _nested_get(default_stats, "forwardPE"),
+                    _nested_get(summary_detail, "forwardPE"),
+                ),
+                "ev_to_ebitda": _pick_number(
+                    info.get("enterpriseToEbitda"),
+                    _nested_get(default_stats, "enterpriseToEbitda"),
+                ),
+                "price_to_sales": _pick_number(
+                    info.get("priceToSalesTrailing12Months"),
+                    _nested_get(default_stats, "priceToSalesTrailing12Months"),
+                ),
+                "peg_ratio": _pick_number(
+                    info.get("pegRatio"),
+                    _nested_get(default_stats, "pegRatio"),
+                ),
             },
             "margins": {
-                "gross": _num(info.get("grossMargins")),
-                "operating": _num(info.get("operatingMargins")),
-                "net": _num(info.get("profitMargins")),
+                "gross": _pick_number(
+                    info.get("grossMargins"),
+                    _nested_get(financial_data, "grossMargins"),
+                ),
+                "operating": _pick_number(
+                    info.get("operatingMargins"),
+                    _nested_get(financial_data, "operatingMargins"),
+                ),
+                "net": _pick_number(
+                    info.get("profitMargins"),
+                    _nested_get(financial_data, "profitMargins"),
+                ),
             },
             "growth": {
-                "revenue_growth": _num(info.get("revenueGrowth")),
-                "earnings_growth": _num(info.get("earningsGrowth")),
+                "revenue_growth": _pick_number(
+                    info.get("revenueGrowth"),
+                    _nested_get(financial_data, "revenueGrowth"),
+                ),
+                "earnings_growth": _pick_number(
+                    info.get("earningsGrowth"),
+                    _nested_get(financial_data, "earningsGrowth"),
+                ),
             },
             "balance_sheet": {
-                "total_cash": _num(info.get("totalCash")),
-                "total_debt": _num(info.get("totalDebt")),
-                "debt_to_equity": _num(info.get("debtToEquity")),
-                "current_ratio": _num(info.get("currentRatio")),
-                "free_cash_flow": _num(info.get("freeCashflow")),
+                "total_cash": _pick_number(
+                    info.get("totalCash"),
+                    _nested_get(financial_data, "totalCash"),
+                ),
+                "total_debt": _pick_number(
+                    info.get("totalDebt"),
+                    _nested_get(financial_data, "totalDebt"),
+                ),
+                "debt_to_equity": _pick_number(
+                    info.get("debtToEquity"),
+                    _nested_get(financial_data, "debtToEquity"),
+                ),
+                "current_ratio": _pick_number(
+                    info.get("currentRatio"),
+                    _nested_get(financial_data, "currentRatio"),
+                ),
+                "free_cash_flow": _pick_number(
+                    info.get("freeCashflow"),
+                    _nested_get(financial_data, "freeCashflow"),
+                ),
             },
             "technicals": {
                 "ma_50": _num(close.tail(50).mean()) if len(close) >= 50 else None,
                 "ma_200": _num(close.tail(200).mean()) if len(close) >= 200 else None,
                 "rsi_14": _rsi(close),
-                "52w_high": _num(close.max()) if len(close) else None,
-                "52w_low": _num(close.min()) if len(close) else None,
+                "52w_high": _pick_number(
+                    _num(close.max()) if len(close) else None,
+                    _obj_get(fast_info, "yearHigh"),
+                    _nested_get(summary_detail, "fiftyTwoWeekHigh"),
+                ),
+                "52w_low": _pick_number(
+                    _num(close.min()) if len(close) else None,
+                    _obj_get(fast_info, "yearLow"),
+                    _nested_get(summary_detail, "fiftyTwoWeekLow"),
+                ),
             },
         }
     )
