@@ -26,8 +26,10 @@ TECHNICAL_PROMPT = (
 MACRO_CONSENSUS_PROMPT = (
     "You are a macro strategist. Summarize the street consensus from major institutions "
     "(UBS, BlackRock, Goldman Sachs, JPMorgan, Morgan Stanley, Citi, Bank of America) based "
-    "ONLY on the commentary snippets provided. Output 4-6 concise bullet points covering: "
-    "rates/inflation view, growth outlook, risk sentiment, and positioning implications."
+    "ONLY on the commentary snippets provided. Focus on ASSET-CLASS level views, not single-bank "
+    "earnings commentary. Output exactly 5 concise bullet points with these labels: "
+    "Rates/Inflation, Equities, Credit, FX/Commodities, and Positioning/Risk Sentiment. "
+    "If an area has weak evidence, explicitly say so."
 )
 PM_PROMPT = (
     "You are the Portfolio Manager chairing an investment committee. Synthesize the analyst reports "

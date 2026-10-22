@@ -64,8 +64,8 @@ def _render_ticker_data(
 
     with st.expander("Street macro consensus (Step 1)", expanded=True):
         st.write(macro_summary or "No street macro commentary summary available.")
-        if macro_commentary:
-            st.markdown("**Latest street commentary headlines**")
+    if macro_commentary:
+        with st.expander("Street macro source headlines", expanded=False):
             for item in macro_commentary[:8]:
                 st.markdown(
                     f"- [{item.get('title', 'Untitled')}]({item.get('link', '')})"

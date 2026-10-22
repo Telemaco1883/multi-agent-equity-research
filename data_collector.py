@@ -19,7 +19,9 @@ FMP_BASE_URL = "https://financialmodelingprep.com/stable"
 NEWS_URL = "https://news.google.com/rss/search?q={ticker}+stock"
 STREET_COMMENTARY_QUERY = (
     "(UBS OR BlackRock OR Goldman Sachs OR JPMorgan OR Morgan Stanley OR Citi OR "
-    "\"Bank of America\") (macro OR inflation OR rates OR recession OR fed OR outlook OR economy) when:14d"
+    "\"Bank of America\") (macro OR inflation OR rates OR fed OR growth OR recession OR "
+    "equities OR stocks OR bonds OR credit OR spreads OR fx OR dollar OR commodities OR oil "
+    "OR gold OR volatility OR risk sentiment) -earnings -quarterly -q1 -q2 -q3 -q4 when:14d"
 )
 STREET_COMMENTARY_URL = "https://news.google.com/rss/search?q={query}"
 ARTICLE_TIMEOUT_SECONDS = 8
