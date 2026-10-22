@@ -100,7 +100,7 @@ def _render_ticker_data(ticker_symbol: str, fundamentals: dict, news: list[dict]
             st.write("No recent headlines found.")
 
 
-ticker = st.text_input("Ticker", placeholder="TSLA").strip().upper()
+ticker = st.text_input("Ticker", placeholder="TSLA", key="ticker_input").strip().upper()
 if ticker and st.session_state.get("loaded_ticker") and ticker != st.session_state["loaded_ticker"]:
     st.session_state.pop("fundamentals", None)
     st.session_state.pop("news", None)
@@ -163,14 +163,15 @@ if run:
         except Exception as exc:
             st.error(f"The committee could not complete: {exc}")
 
-data_loaded_for_ticker = (
-    ticker
-    and st.session_state.get("loaded_ticker") == ticker
-    and "fundamentals" in st.session_state
+loaded_ticker = st.session_state.get("loaded_ticker", "")
+data_loaded_for_ticker = bool(
+    loaded_ticker and "fundamentals" in st.session_state and "news" in st.session_state
 )
 
 if data_loaded_for_ticker and not rendered_in_run:
-    _render_ticker_data(ticker, st.session_state["fundamentals"], st.session_state["news"])
+    if ticker and ticker != loaded_ticker:
+        st.info(f"Showing cached data for {loaded_ticker}. Click run to load {ticker}.")
+    _render_ticker_data(loaded_ticker, st.session_state["fundamentals"], st.session_state["news"])
 
 if "result" in st.session_state:
     t, result = st.session_state["result"]
