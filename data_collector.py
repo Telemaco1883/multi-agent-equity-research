@@ -272,46 +272,17 @@ def _enrich_google_entry(entry: Any) -> dict[str, str]:
     }
 
 
-def _fetch_fundamental_sources_stable(
-    ticker: str,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], Any, Any, Any, Any]:
-    symbol_params = {"symbol": ticker}
-    quote = _first_record(_fmp_get("/quote", symbol_params, base_url=FMP_STABLE_BASE_URL))
-    profile = _first_record(_fmp_get("/profile", symbol_params, base_url=FMP_STABLE_BASE_URL))
-    metrics_ttm = _first_record(
-        _fmp_get("/key-metrics-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL)
-    )
-    ratios_ttm = _first_record(_fmp_get("/ratios-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL))
-    income = _fmp_get("/income-statement", {**symbol_params, "limit": 2}, base_url=FMP_STABLE_BASE_URL)
-    balance = _fmp_get(
-        "/balance-sheet-statement", {**symbol_params, "limit": 1}, base_url=FMP_STABLE_BASE_URL
-    )
-    cashflow = _fmp_get("/cash-flow-statement", {**symbol_params, "limit": 1}, base_url=FMP_STABLE_BASE_URL)
-    price_history = _fmp_get("/historical-price-eod/full", symbol_params, base_url=FMP_STABLE_BASE_URL)
-    return quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history
-
-
-def _fetch_fundamental_sources_v3(
-    ticker: str,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], Any, Any, Any, Any]:
-    encoded = quote_plus(ticker)
-    quote = _first_record(_fmp_get(f"/quote/{encoded}", base_url=FMP_V3_BASE_URL))
-    profile = _first_record(_fmp_get(f"/profile/{encoded}", base_url=FMP_V3_BASE_URL))
-    metrics_ttm = _first_record(_fmp_get(f"/key-metrics-ttm/{encoded}", base_url=FMP_V3_BASE_URL))
-    ratios_ttm = _first_record(_fmp_get(f"/ratios-ttm/{encoded}", base_url=FMP_V3_BASE_URL))
-    income = _fmp_get(f"/income-statement/{encoded}", {"limit": 2}, base_url=FMP_V3_BASE_URL)
-    balance = _fmp_get(
-        f"/balance-sheet-statement/{encoded}",
-        {"limit": 1},
-        base_url=FMP_V3_BASE_URL,
-    )
-    cashflow = _fmp_get(f"/cash-flow-statement/{encoded}", {"limit": 1}, base_url=FMP_V3_BASE_URL)
-    price_history = _fmp_get(
-        f"/historical-price-full/{encoded}",
-        {"serietype": "line"},
-        base_url=FMP_V3_BASE_URL,
-    )
-    return quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history
+def _fmp_get_optional(
+    path: str,
+    params: dict[str, Any] | None = None,
+    *,
+    base_url: str,
+    default: Any,
+) -> Any:
+    try:
+        return _fmp_get(path, params, base_url=base_url)
+    except Exception:
+        return default
 
 
 def get_stock_fundamentals(ticker: str) -> dict:
@@ -320,23 +291,76 @@ def get_stock_fundamentals(ticker: str) -> dict:
     if not ticker:
         return {"ticker": ticker, "error": "Ticker is required."}
 
-    try:
-        quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history = (
-            _fetch_fundamental_sources_stable(ticker)
+    symbol_params = {"symbol": ticker}
+    encoded = quote_plus(ticker)
+
+    quote = _first_record(
+        _fmp_get_optional("/quote", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
+    ) or _first_record(
+        _fmp_get_optional(f"/quote/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
+    )
+    profile = _first_record(
+        _fmp_get_optional("/profile", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
+    ) or _first_record(
+        _fmp_get_optional(f"/profile/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
+    )
+    metrics_ttm = _first_record(
+        _fmp_get_optional("/key-metrics-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
+    ) or _first_record(
+        _fmp_get_optional(f"/key-metrics-ttm/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
+    )
+    ratios_ttm = _first_record(
+        _fmp_get_optional("/ratios-ttm", symbol_params, base_url=FMP_STABLE_BASE_URL, default=[])
+    ) or _first_record(
+        _fmp_get_optional(f"/ratios-ttm/{encoded}", base_url=FMP_V3_BASE_URL, default=[])
+    )
+
+    income = _fmp_get_optional(
+        "/income-statement",
+        {**symbol_params, "limit": 2},
+        base_url=FMP_STABLE_BASE_URL,
+        default=[],
+    ) or _fmp_get_optional(
+        f"/income-statement/{encoded}",
+        {"limit": 2},
+        base_url=FMP_V3_BASE_URL,
+        default=[],
+    )
+    balance = _fmp_get_optional(
+        "/balance-sheet-statement",
+        {**symbol_params, "limit": 1},
+        base_url=FMP_STABLE_BASE_URL,
+        default=[],
+    ) or _fmp_get_optional(
+        f"/balance-sheet-statement/{encoded}",
+        {"limit": 1},
+        base_url=FMP_V3_BASE_URL,
+        default=[],
+    )
+    cashflow = _fmp_get_optional(
+        "/cash-flow-statement",
+        {**symbol_params, "limit": 1},
+        base_url=FMP_STABLE_BASE_URL,
+        default=[],
+    ) or _fmp_get_optional(
+        f"/cash-flow-statement/{encoded}",
+        {"limit": 1},
+        base_url=FMP_V3_BASE_URL,
+        default=[],
+    )
+    price_history = _fmp_get_optional(
+        "/historical-price-eod/full",
+        symbol_params,
+        base_url=FMP_STABLE_BASE_URL,
+        default=[],
+    )
+    if not price_history:
+        price_history = _fmp_get_optional(
+            f"/historical-price-full/{encoded}",
+            {"serietype": "line"},
+            base_url=FMP_V3_BASE_URL,
+            default={},
         )
-    except Exception as stable_exc:
-        try:
-            quote, profile, metrics_ttm, ratios_ttm, income, balance, cashflow, price_history = (
-                _fetch_fundamental_sources_v3(ticker)
-            )
-        except Exception as v3_exc:
-            return {
-                "ticker": ticker,
-                "error": (
-                    "Failed to fetch market data: "
-                    f"stable error: {stable_exc} | v3 fallback error: {v3_exc}"
-                ),
-            }
 
     if isinstance(price_history, dict):
         historical = price_history.get("historical", [])
@@ -349,7 +373,11 @@ def get_stock_fundamentals(ticker: str) -> dict:
         errors="coerce",
     ).dropna()
     if close.empty:
-        return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
+        fallback_price = _pick_number(quote.get("price"), profile.get("price"))
+        if fallback_price is not None:
+            close = pd.Series([fallback_price], dtype="float64")
+        else:
+            return {"ticker": ticker, "error": f"No market data found for '{ticker}'."}
 
     income_rows = [row for row in income if isinstance(row, dict)] if isinstance(income, list) else []
     latest_income = income_rows[0] if income_rows else {}
