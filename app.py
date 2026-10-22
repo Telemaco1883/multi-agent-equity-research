@@ -10,7 +10,7 @@ from committee import build_report, run_committee
 from data_collector import get_latest_news, get_stock_fundamentals
 
 st.set_page_config(page_title="Investment Committee", page_icon="📈", layout="centered")
-st.title("📈 Multi-Agent Investment Committee")
+st.title("Multi-Agent Investment Committee 📈")
 st.write(
     "Enter a US stock ticker. Specialist analysts research it, a Portfolio Manager rules, "
     "a Devil's Advocate stress-tests the thesis, and the committee delivers a final verdict."
